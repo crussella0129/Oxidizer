@@ -7,4 +7,6 @@ Live Sources to Pull from:
 
 The Book - Brown Univ. Fork : https://rust-book.cs.brown.edu/
 
+Rust By Example: https://doc.rust-lang.org/rust-by-example/
+
 Crate Categories: https://lib.rs/#home-categories

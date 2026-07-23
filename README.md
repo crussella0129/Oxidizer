@@ -13,4 +13,3 @@ An agent-agnostic Rust lang skill, with instructions for live updates from Rust 
     - Crate Std (Rust Standard Library Documentation): [https://doc.rust-lang.org/std/index.html]
     - The Rustonomicon: [https://doc.rust-lang.org/nomicon/]
   - Crate Categories: [https://lib.rs/#home-categories]
-  - 

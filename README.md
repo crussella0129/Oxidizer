@@ -1,5 +1,5 @@
 # Oxidizer
-(***Under Construction***)An agent-agnostic Rust lang skill, with instructions for live updates from Rust Lang official canon sources.
+(***Under Construction***) An agent-agnostic Rust lang skill, with instructions for live updates from Rust Lang official canon sources.
 
 ***Sprint 0 Intitialization Prompt***: 
 

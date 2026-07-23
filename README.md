@@ -11,5 +11,7 @@
       - Brown Univ. Fork : [https://rust-book.cs.brown.edu/]     
     - Rust By Example: [https://doc.rust-lang.org/rust-by-example/]
     - Crate Std (Rust Standard Library Documentation): [https://doc.rust-lang.org/std/index.html]
+    - The Rust Reference: [https://doc.rust-lang.org/reference/index.html]
     - The Rustonomicon: [https://doc.rust-lang.org/nomicon/]
   - Crate Categories: [https://lib.rs/#home-categories]
+  - Brown Univ. C++ to Rust Phrasebook: [https://cel.cs.brown.edu/crp/]

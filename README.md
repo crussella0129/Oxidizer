@@ -8,10 +8,9 @@ An agent-agnostic Rust lang skill, with instructions for live updates from Rust 
 - **Live Sources to Pull and build MCP from**:
   - Rust-lang Official Documentation: https://doc.rust-lang.org , most notably:
     - The Book: [https://doc.rust-lang.org/book/]
-      - Notable Book Forks: 
-        - Brown Univ. Fork : [https://rust-book.cs.brown.edu/]  
+      - Brown Univ. Fork : [https://rust-book.cs.brown.edu/]     
     - Rust By Example: [https://doc.rust-lang.org/rust-by-example/]
     - Crate Std (Rust Standard Library Documentation): [https://doc.rust-lang.org/std/index.html]
     - The Rustonomicon: [https://doc.rust-lang.org/nomicon/]
-  - Crate Categories: https://lib.rs/#home-categories
+  - Crate Categories: [https://lib.rs/#home-categories]
   - 

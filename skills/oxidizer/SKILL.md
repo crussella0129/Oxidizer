@@ -72,6 +72,14 @@ answer is in the part that got cut.
 **Cite what you used.** Every command prints the upstream `doc.rust-lang.org`
 URL for what it returned. Include it. The user should be able to check you.
 
+**Know when you have left the canon.** One optional source, `algorithms`, is a
+community repository of worked implementations rather than canon. It is there
+because nothing in the Book or the Reference contains a compiling red-black
+tree. Treat it as illustrative only: never cite it for what is idiomatic,
+correct, or guaranteed, and re-run clippy on anything you adapt from it rather
+than inheriting its lint posture. `domains/08_implement/CONTEXT.md` has the
+rules; `oxidize manifest` shows whether it is mirrored at all.
+
 **Leave the disk as you found it.** `diagnose` runs `cargo check` or
 `cargo clippy` on the user's project, so using this skill grows their `target/`
 directory — routinely past 700MB for a project with a few dozen dependencies,
@@ -104,7 +112,7 @@ architecture). Layers load on demand rather than all at once:
 ```
 SKILL.md              Layer 0  identity + routing map        (you are here)
 CONTEXT.md            Layer 1  corpus map: what each source is good for
-domains/NN_*/         Layer 2  one contract per question type
+domains/NN_*/         Layer 2  one contract per question type (eight)
 corpus/               Layer 3  the mirrored canon (generated; see references/)
 ```
 

@@ -258,8 +258,103 @@ def test_search() -> None:
                   id_part in hits[0]["id"], f"got {hits[0]['id']}")
 
 
+def test_algorithms() -> None:
+    section("10. Worked-examples source (non-canonical)")
+    manifest_path = Path(os.environ.get("OXIDIZER_CORPUS", ROOT / "corpus")) / "MANIFEST.json"
+    m = json.loads(manifest_path.read_text())
+    src = next((s for s in m["sources"] if s["id"] == "algorithms"), None)
+    if src is None:
+        print("  SKIP  algorithms source not mirrored "
+              "(build with: mirror.py --algorithms)")
+        return
+
+    check("algorithms is flagged as non-canonical",
+          src.get("canonical") is False)
+    check("algorithms records the revision it was built from",
+          bool(src.get("revision")), f"revision={src.get('revision')!r}")
+    check("algorithms role warns it is not authoritative",
+          "NOT CANON" in src["role"])
+    check("algorithms records the lint posture of its own repo",
+          isinstance(src.get("lint_allows"), list) and src["lint_allows"],
+          f"lint_allows={src.get('lint_allows')}")
+
+    docs = json.loads((manifest_path.parent / "algorithms" / "INDEX.json").read_text())["docs"]
+    check("algorithms indexed a meaningful number of examples",
+          len(docs) > 300, f"got {len(docs)}")
+
+    # Citations must be public, commit-pinned, and free of proxy/credential junk.
+    urls = [d["url"] for d in docs]
+    bad = [u for u in urls
+           if "127.0.0.1" in u or "local_proxy" in u or "@" in u.split("//")[-1].split("/")[0]]
+    check("no citation leaks a proxy host or credentials", not bad, f"e.g. {bad[:2]}")
+    pinned = [u for u in urls if "/blob/" in u]
+    if pinned:
+        rev = src["revision"]
+        check("citations are pinned to the built revision",
+              all(f"/blob/{rev}/" in u for u in pinned[:50]))
+
+    # Rust-source extraction must produce the sections the domain contract promises.
+    rc, out = oxidize("show", "algorithms/data_structures/trie", "--json",
+                      "--max-tokens", "4000")
+    data = json.loads(out)
+    body = data["content"]
+    for heading in ("Public items", "Implementation", "Tests (usage examples)"):
+        check(f"trie example has a '{heading}' section", f"## {heading}" in body)
+    check("trie example extracted the struct signature",
+          "pub struct Trie" in body)
+    check("trie example kept the module doc comment",
+          "prefix tree" in body.lower())
+
+    # Section slicing is the whole point on a 2k-token source file.
+    rc, out = oxidize("show", "algorithms/data_structures/union_find",
+                      "--section", "Public items", "--json")
+    data = json.loads(out)
+    check("a source file can be sliced to just its public API",
+          data["tokens_returned"] < 200 and data["tokens_total"] > 1000,
+          f"{data['tokens_returned']} of {data['tokens_total']}")
+
+    rc, out = oxidize("search", "trie prefix tree", "--source", "algorithms",
+                      "--json", "--limit", "3")
+    hits = json.loads(out)["hits"]
+    check("search finds an example by algorithm name",
+          hits and "trie" in hits[0]["id"], f"got {hits[0]['id'] if hits else None}")
+
+
+def test_implement_routing() -> None:
+    section("11. 08_implement routing (must not cannibalise other domains)")
+    for question, domain in [
+        ("implement a trie in Rust", "08_implement"),
+        ("how do I write a red-black tree from scratch", "08_implement"),
+        ("show me a working dijkstra implementation", "08_implement"),
+        # These must keep going where they went before the domain was added.
+        ("explain what ownership is, I'm new to Rust", "02_learn"),
+        ("make this more idiomatic, what would clippy say", "06_idiom"),
+        ("why does the borrow checker reject this, error E0502", "01_diagnose"),
+        ("is this transmute undefined behaviour in unsafe code", "05_unsafe"),
+        ("what's the Rust equivalent of a C++ shared_ptr", "07_migrate"),
+    ]:
+        rc, out = oxidize("route", question, "--json")
+        picked = [d["domain"] for d in json.loads(out)["domains"]]
+        check(f"route -> {domain}: {question[:42]!r}",
+              picked and picked[0] == domain, f"got {picked}")
+
+    contract = ROOT / "skills" / "oxidizer" / "domains" / "08_implement" / "CONTEXT.md"
+    check("08_implement contract exists", contract.exists())
+    if contract.exists():
+        body = contract.read_text()
+        check("contract tells the agent to check std first",
+              "Check `std` first" in body or "Check std first" in body)
+        check("contract states the source is not canon", "not canon" in body.lower())
+        check("contract says to re-lint adapted code",
+              "--clippy" in body and "allow-list" in body)
+
+    l1 = (ROOT / "skills" / "oxidizer" / "CONTEXT.md").read_text()
+    check("corpus map ranks algorithms below the canon",
+          "not authoritative for anything" in l1)
+
+
 def test_disk() -> None:
-    section("10. Disk hygiene reporting")
+    section("12. Disk hygiene reporting")
     rc, out = oxidize("disk", str(ROOT), "--json")
     if rc != 0:
         check("disk command runs", False, out[:300])
@@ -307,7 +402,7 @@ def test_disk() -> None:
 
 
 def test_disk_guidance_documented() -> None:
-    section("11. Disk-hygiene guidance is wired into the skill")
+    section("13. Disk-hygiene guidance is wired into the skill")
     ref = ROOT / "skills" / "oxidizer" / "references" / "disk-hygiene.md"
     check("references/disk-hygiene.md exists", ref.exists())
     if ref.exists():
@@ -399,7 +494,7 @@ class McpClient:
 
 
 def test_mcp() -> None:
-    section("12. MCP server over stdio")
+    section("14. MCP server over stdio")
     if not MCP_BIN.exists():
         check("MCP binary built", False,
               f"not found at {MCP_BIN} — run `cargo build` in mcp/oxidizer-mcp")
@@ -489,6 +584,8 @@ def main() -> int:
     test_budgets()
     test_search()
     test_explain()
+    test_algorithms()
+    test_implement_routing()
     test_disk()
     test_disk_guidance_documented()
     if args.mcp:

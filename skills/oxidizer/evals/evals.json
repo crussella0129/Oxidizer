@@ -5,7 +5,9 @@
       "id": 1,
       "prompt": "This function won't compile and I don't understand why. Can you explain what's wrong and fix it?",
       "expected_output": "Identifies E0502, explains that the immutable borrow of words[0] is still live when push() takes a mutable borrow, and fixes it by ending the first borrow before the push. Cites the error index.",
-      "files": ["tests/fixtures/borrow_conflict.rs"],
+      "files": [
+        "tests/fixtures/borrow_conflict.rs"
+      ],
       "expectations": [
         "The skill ran oxidize diagnose on the file rather than guessing the error",
         "The answer names error code E0502",
@@ -19,7 +21,9 @@
       "id": 2,
       "prompt": "Review this for idiomatic Rust and clean it up.",
       "expected_output": "Runs clippy, reports needless_range_loop, ptr_arg, needless_return, len_zero and useless_format, and rewrites the code accordingly.",
-      "files": ["tests/fixtures/unidiomatic.rs"],
+      "files": [
+        "tests/fixtures/unidiomatic.rs"
+      ],
       "expectations": [
         "The skill ran oxidize diagnose --clippy rather than reviewing by eye",
         "The answer names at least four of the lints that actually fired",
@@ -46,7 +50,9 @@
       "id": 4,
       "prompt": "Is this unsafe FFI wrapper sound? What invariants does the caller have to uphold?",
       "expected_output": "Consults the Nomicon, identifies the non-overlap and validity requirements already documented in the # Safety comment, and confirms the wrapper is sound given them. Notes that memcpy requires non-overlapping regions.",
-      "files": ["tests/fixtures/unsafe_ffi.rs"],
+      "files": [
+        "tests/fixtures/unsafe_ffi.rs"
+      ],
       "expectations": [
         "The skill routed to 05_unsafe rather than 02_learn",
         "The answer retrieved from the nomicon source",
@@ -79,6 +85,20 @@
         "The answer explicitly labels the guarantee level",
         "The answer quotes or closely paraphrases the normative text",
         "The answer cites the Reference URL"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "I need a trie in Rust for autocomplete. Can you write one?",
+      "expected_output": "Notes that std has no trie, consults the worked-examples corpus for structure, and produces a compiling generic implementation that has been clippy-checked rather than copied verbatim.",
+      "files": [],
+      "expectations": [
+        "The skill routed to 08_implement",
+        "The answer checked whether std already provides this before implementing",
+        "The implementation compiles (verified with oxidize diagnose)",
+        "The implementation was clippy-checked rather than inheriting the example corpus's allow-list",
+        "If the algorithms corpus was consulted, it is cited as community code and not as canon",
+        "The answer does not present the example repository as authoritative on Rust idiom"
       ]
     }
   ]

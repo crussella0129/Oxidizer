@@ -100,6 +100,21 @@ ROUTING: list[dict] = [
         "why": "Style/idiom question; clippy encodes the community consensus.",
     },
     {
+        "domain": "08_implement",
+        "sources": ["algorithms", "rust-by-example", "std", "book"],
+        "triggers": [
+            r"\bimplement\b", r"\bwrite (?:a|an|my own)\b", r"\bfrom scratch\b",
+            r"\balgorithm\b", r"\bdata structure\b", r"\bhow would i build\b",
+            r"\bshow me (?:a|an) (?:working|complete|full)\b",
+            r"\b(?:binary|red.?black|avl|b).?tree\b", r"\btrie\b", r"\bheap\b",
+            r"\bgraph\b", r"\bdijkstra\b", r"\bsort(?:ing)?\b", r"\bsearch(?:ing)?\b",
+            r"\blinked list\b", r"\bhash ?table\b", r"\bunion.?find\b",
+            r"\bdynamic programming\b", r"\bmemoiz", r"\bbacktrack",
+        ],
+        "why": "Wants a working implementation; the canon teaches concepts but "
+               "carries almost no complete worked examples.",
+    },
+    {
         "domain": "07_migrate",
         "sources": ["crp-phrasebook", "book", "nomicon", "reference"],
         "triggers": [

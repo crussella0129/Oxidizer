@@ -294,6 +294,169 @@ def rustdoc_kind_and_path(rel: str) -> tuple[str, str] | None:
     return kind, "::".join(mods + [name])
 
 
+# -- Rust source ----------------------------------------------------------
+#
+# Worked-example corpora are `.rs` files, not HTML. What matters in a source
+# file is different from what matters in a doc page: the public signatures, the
+# doc comments, and the tests (which double as usage examples).
+
+_ITEM_RE = re.compile(
+    r"^(?P<indent>[ \t]*)"
+    r"(?P<vis>pub(?:\s*\([^)]*\))?\s+)?"
+    r"(?P<mods>(?:default\s+|const\s+|async\s+|unsafe\s+|extern\s+\"[^\"]*\"\s+)*)"
+    r"(?P<kind>fn|struct|enum|trait|type|union|macro_rules!|impl)\s+"
+    r"(?P<rest>[^{;=]*)",
+    re.M,
+)
+
+_TEST_MOD_RE = re.compile(
+    r"\n#\[cfg\(test\)\]\s*\nmod\s+\w+\s*\{", re.M)
+
+
+def _balanced_block(text: str, open_idx: int) -> int:
+    """Index just past the `}` matching the `{` at `open_idx`.
+
+    Brace counting is not a Rust parser: it can be fooled by braces inside
+    string or char literals. It is skipped over those below, which is enough
+    for splitting a test module off the end of a file.
+    """
+    depth = 0
+    i = open_idx
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+        elif ch == "'":
+            # Could be a lifetime (`'a`) or a char literal (`'x'`).
+            if i + 2 < n and (text[i + 1] == "\\" or text[i + 2] == "'"):
+                i += 1
+                while i < n and text[i] != "'":
+                    i += 2 if text[i] == "\\" else 1
+        elif ch == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def split_test_module(source: str) -> tuple[str, str]:
+    """Separate `#[cfg(test)] mod tests { .. }` from the implementation."""
+    m = _TEST_MOD_RE.search(source)
+    if not m:
+        return source, ""
+    brace = source.index("{", m.start())
+    end = _balanced_block(source, brace)
+    return (source[: m.start()].rstrip() + "\n", source[m.start(): end].strip())
+
+
+def rust_items(source: str) -> list[dict]:
+    """Public items declared in a Rust source file, with their doc comments."""
+    lines = source.splitlines()
+    starts = {}
+    offset = 0
+    for idx, line in enumerate(lines):
+        starts[offset] = idx
+        offset += len(line) + 1
+
+    items: list[dict] = []
+    for m in _ITEM_RE.finditer(source):
+        if m.group("indent"):
+            continue  # nested item; only top-level ones are the public surface
+        kind = m.group("kind")
+        vis = (m.group("vis") or "").strip()
+        if kind != "impl" and not vis.startswith("pub"):
+            continue
+        signature = re.sub(r"\s+", " ", m.group(0).strip()).rstrip(",")
+        name_m = re.match(r"[A-Za-z_][A-Za-z_0-9]*", m.group("rest").lstrip())
+        name = name_m.group(0) if name_m else ""
+        if kind == "impl":
+            name = m.group("rest").strip()
+
+        # Doc comments and attributes immediately above the item.
+        doc: list[str] = []
+        line_no = starts.get(m.start(), None)
+        if line_no is None:
+            line_no = source[: m.start()].count("\n")
+        i = line_no - 1
+        while i >= 0:
+            stripped = lines[i].strip()
+            if stripped.startswith("///"):
+                doc.append(stripped[3:].strip())
+            elif stripped.startswith("#[") or stripped.startswith("//"):
+                pass
+            else:
+                break
+            i -= 1
+        items.append({
+            "kind": kind, "name": name, "signature": signature,
+            "doc": "\n".join(reversed(doc)).strip(),
+        })
+    return items
+
+
+def rust_source_to_markdown(source: str, title: str) -> tuple[str, list[str], list[dict]]:
+    """Render one Rust source file as a retrievable document.
+
+    Returns (markdown, headings, items). Tests are kept and labelled: in an
+    algorithms corpus they are the clearest statement of how the thing is meant
+    to be called.
+    """
+    module_doc = "\n".join(
+        line.strip()[3:].strip()
+        for line in source.splitlines()
+        if line.strip().startswith("//!")
+    ).strip()
+
+    impl_src, test_src = split_test_module(source)
+    items = rust_items(impl_src)
+
+    parts = [f"# {title}\n"]
+    headings = [title]
+    if module_doc:
+        parts.append(module_doc + "\n")
+
+    public = [i for i in items if i["kind"] != "impl"]
+    if public:
+        parts.append("## Public items\n")
+        headings.append("Public items")
+        for item in public:
+            parts.append(f"- `{item['signature']}`")
+            if item["doc"]:
+                first = item["doc"].splitlines()[0]
+                parts.append(f"  - {first}")
+        parts.append("")
+
+    documented = [i for i in items if i["doc"]]
+    if documented:
+        parts.append("## Documentation\n")
+        headings.append("Documentation")
+        for item in documented:
+            parts.append(f"### {item['name']}\n")
+            headings.append(item["name"])
+            parts.append(f"```rust\n{item['signature']}\n```\n")
+            parts.append(item["doc"] + "\n")
+
+    parts.append("## Implementation\n")
+    headings.append("Implementation")
+    parts.append(f"```rust\n{impl_src.strip()}\n```\n")
+
+    if test_src:
+        parts.append("## Tests (usage examples)\n")
+        headings.append("Tests (usage examples)")
+        parts.append(f"```rust\n{test_src}\n```\n")
+
+    return "\n".join(parts), headings, items
+
+
 def estimate_tokens(text: str) -> int:
     """~4 chars per token. Deliberately cheap: this runs over 5k+ documents.
 

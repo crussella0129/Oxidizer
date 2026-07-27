@@ -25,6 +25,7 @@ most common way to answer confidently and wrongly.
 | `cargo` | Manifests, features, workspaces, profiles, publishing | Language questions |
 | `edition-guide` | What changed between editions, migration | Current-edition semantics |
 | `crp-phrasebook` | C++ idiom → Rust idiom, side by side | Rust-native design |
+| `algorithms` | Complete worked implementations of algorithms and data structures | **Nothing.** Not canon — see below |
 
 ## Precedence when sources disagree
 
@@ -39,6 +40,17 @@ most common way to answer confidently and wrongly.
 `lints` is generated from the installed `clippy-driver`, so it is exact about
 *which* lints exist and their default levels, and thin on rationale. For the
 reasoning behind a lint, follow up in the Book.
+
+`algorithms` sits below all of them and is **not authoritative for anything**.
+It is a community repository of worked implementations, mirrored because the
+canon genuinely lacks complete examples — nothing in the Book or the Reference
+contains a compiling red-black tree. It is optional, off by default, and useful
+only for structure.
+
+Never cite it to settle what is idiomatic, what is correct, or what the language
+guarantees. Its own `Cargo.toml` allows lints that `06_idiom` tells users to
+fix; `oxidize manifest` prints which ones. If it disagrees with the canon, the
+canon is right. See `domains/08_implement/CONTEXT.md` before using it.
 
 ## Things the corpus does not cover
 
@@ -78,3 +90,4 @@ Not sources — how the skill itself behaves.
 | `domains/05_unsafe/CONTEXT.md` | Unsafe, UB, FFI, variance |
 | `domains/06_idiom/CONTEXT.md` | Make this idiomatic |
 | `domains/07_migrate/CONTEXT.md` | Port from C/C++/another language |
+| `domains/08_implement/CONTEXT.md` | Write a working implementation of X |

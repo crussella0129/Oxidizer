@@ -78,8 +78,15 @@ stdlib-only Python 3 — no pip install stands between you and a working corpus.
 | Clippy development book | toolchain | 34 |
 | Style guide | toolchain | 10 |
 
-5,263 documents, ~8.1M tokens. `core`, `alloc`, the embedded book and the
-unstable book are available via `--include`.
+Optional, **not canon**, off by default (`--algorithms`):
+
+| Source | From | Docs |
+|---|---|---|
+| Worked algorithm implementations | [TheAlgorithms/Rust](https://github.com/TheAlgorithms/Rust) | 394 |
+
+5,263 documents / ~8.1M tokens for the canon; 5,657 / ~8.6M with `--algorithms`.
+`core`, `alloc`, the embedded book and the unstable book are available via
+`--include`.
 
 Counts are lower than the raw page counts on disk because redirect shims and
 retired-edition copies are dropped at mirror time — the Book ships 124 root
@@ -156,12 +163,13 @@ skills/oxidizer/
 │   ├── 04_spec/                   is this legal / guaranteed
 │   ├── 05_unsafe/                 unsafe, UB, FFI, variance
 │   ├── 06_idiom/                  make this idiomatic
-│   └── 07_migrate/                port from C/C++
+│   ├── 07_migrate/                port from C/C++
+│   └── 08_implement/              write a working implementation
 ├── scripts/
 │   ├── mirror.py         build/refresh the corpus
 │   ├── oxidize.py        the retrieval CLI
-│   └── extract.py        HTML -> markdown
-├── references/           how the corpus works; MWP deviations
+│   └── extract.py        HTML and Rust source -> markdown
+├── references/           corpus, disk hygiene, MWP deviations
 └── evals/                test prompts and expectations
 
 corpus/                   Layer 3  the mirrored canon (generated, gitignored)
@@ -205,6 +213,9 @@ budget enforcement, search ranking, and CLI/MCP parity.
 - The Rust Reference — <https://doc.rust-lang.org/reference/>
 - The Rustonomicon — <https://doc.rust-lang.org/nomicon/>
 - Brown C++-to-Rust Phrasebook — <https://cel.cs.brown.edu/crp/>
+
+Optional worked examples, mirrored only with `--algorithms` and clearly marked
+non-canonical: [TheAlgorithms/Rust](https://github.com/TheAlgorithms/Rust) (MIT).
 
 ## License
 

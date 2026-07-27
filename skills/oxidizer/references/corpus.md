@@ -78,6 +78,36 @@ The trade-off: one-line descriptions rather than the full write-ups on
 rust-lang.github.io. Enough to identify and act on a lint; for rationale, follow
 up in the Book.
 
+## Worked examples: opt-in and not canon
+
+```bash
+python3 scripts/mirror.py --algorithms                 # TheAlgorithms/Rust
+python3 scripts/mirror.py --algorithms /path/to/repo   # any local Rust checkout
+```
+
+This mirrors a repository of Rust *source files* rather than documentation, to
+fill a real gap: the canon teaches concepts and documents APIs but contains
+almost no complete worked implementations. Each file becomes a document with its
+module docs, public signatures, implementation, and tests in separate sections,
+so `--section "Public items"` costs ~15 tokens against a ~2,000-token file.
+
+It is **off by default and not canonical**, and that is deliberate — everything
+else Oxidizer mirrors is normative or compiler-generated. Indexed at lowest
+precedence, and `oxidize manifest` reports `canonical: false` plus the exact
+commit each citation is pinned to.
+
+Mirroring also parses the source repo's `[lints.clippy]` table and records which
+default-warn style lints it opts out of, so the skill can state the posture the
+examples were written under instead of assuming its own. For TheAlgorithms/Rust
+that is `needless_range_loop`, `needless_return`, `unwrap_used`, `expect_used`,
+`indexing_slicing`, `panic`. Measured against the four style lints in that list
+that Oxidizer's own fixtures test for, 9 of its 423 files trip at least one — so
+the code is mostly fine, but it is not an idiom authority and must not be
+presented as one. See `domains/08_implement/CONTEXT.md`.
+
+The checkout is cached at `corpus/.src/algorithms` and reused on rebuild. Delete
+it to force a fresh clone.
+
 ## Known gaps
 
 - **crates.io / lib.rs.** Not mirrored. `lib.rs`, named in the project brief, is

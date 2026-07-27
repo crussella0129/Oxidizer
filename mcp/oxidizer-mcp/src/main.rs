@@ -163,6 +163,19 @@ const ROUTING: &[Rule] = &[
         ],
     },
     Rule {
+        domain: "08_implement",
+        sources: &["algorithms", "rust-by-example", "std", "book"],
+        why: "Wants a working implementation; the canon teaches concepts but \
+              carries almost no complete worked examples.",
+        triggers: &[
+            "implement", "from scratch", "algorithm", "data structure",
+            "write my own", "write a ", "binary tree", "red-black", "avl",
+            "b-tree", "trie", "heap", "graph", "dijkstra", "sort", "searching",
+            "linked list", "hash table", "union-find", "dynamic programming",
+            "memoiz", "backtrack",
+        ],
+    },
+    Rule {
         domain: "07_migrate",
         sources: &["crp-phrasebook", "book", "nomicon", "reference"],
         why: "Translation task; map source-language idiom to Rust idiom.",

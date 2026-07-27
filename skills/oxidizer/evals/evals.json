@@ -1,0 +1,105 @@
+{
+  "skill_name": "oxidizer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "This function won't compile and I don't understand why. Can you explain what's wrong and fix it?",
+      "expected_output": "Identifies E0502, explains that the immutable borrow of words[0] is still live when push() takes a mutable borrow, and fixes it by ending the first borrow before the push. Cites the error index.",
+      "files": [
+        "tests/fixtures/borrow_conflict.rs"
+      ],
+      "expectations": [
+        "The skill ran oxidize diagnose on the file rather than guessing the error",
+        "The answer names error code E0502",
+        "The explanation describes the overlap between the immutable and mutable borrow",
+        "The proposed fix compiles (verified by a second diagnose run)",
+        "The answer cites a doc.rust-lang.org URL",
+        "The fix does not reach for .clone() or Rc<RefCell<_>> when sequencing the borrows suffices"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review this for idiomatic Rust and clean it up.",
+      "expected_output": "Runs clippy, reports needless_range_loop, ptr_arg, needless_return, len_zero and useless_format, and rewrites the code accordingly.",
+      "files": [
+        "tests/fixtures/unidiomatic.rs"
+      ],
+      "expectations": [
+        "The skill ran oxidize diagnose --clippy rather than reviewing by eye",
+        "The answer names at least four of the lints that actually fired",
+        "&Vec<i32> is changed to &[i32]",
+        "The index loop becomes an iterator chain",
+        "name.len() == 0 becomes name.is_empty()",
+        "Each change is attributed to the lint that motivated it"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "What's the Rust equivalent of a C++ std::shared_ptr, and when should I actually reach for it?",
+      "expected_output": "Maps shared_ptr to Rc<T>/Arc<T>, distinguishes single-threaded from cross-thread, notes Weak for cycles, and cautions that shared ownership is often not what the code needs. Sourced from the Brown phrasebook.",
+      "files": [],
+      "expectations": [
+        "The skill routed to 07_migrate",
+        "The answer retrieved from the crp-phrasebook source",
+        "Rc and Arc are distinguished by thread-safety, not treated as interchangeable",
+        "Weak is mentioned for reference cycles",
+        "The answer cites a source URL"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Is this unsafe FFI wrapper sound? What invariants does the caller have to uphold?",
+      "expected_output": "Consults the Nomicon, identifies the non-overlap and validity requirements already documented in the # Safety comment, and confirms the wrapper is sound given them. Notes that memcpy requires non-overlapping regions.",
+      "files": [
+        "tests/fixtures/unsafe_ffi.rs"
+      ],
+      "expectations": [
+        "The skill routed to 05_unsafe rather than 02_learn",
+        "The answer retrieved from the nomicon source",
+        "The answer states plainly whether the code is sound",
+        "The answer identifies the non-overlap requirement of memcpy",
+        "The answer notes the # Safety doc comment is present and states the contract"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "What does Vec::retain do and what's its exact signature?",
+      "expected_output": "Returns the exact signature pub fn retain<F>(&mut self, f: F) where F: FnMut(&T) -> bool, explains in-place removal preserving order, with the anchored std URL.",
+      "files": [],
+      "expectations": [
+        "The skill used oxidize api rather than searching or answering from memory",
+        "The exact signature is quoted",
+        "The answer notes the predicate keeps elements returning true",
+        "The answer did not load the whole Vec page (~96k tokens)",
+        "The cited URL includes the #method.retain anchor"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Can I rely on the order struct fields get dropped in?",
+      "expected_output": "Yes for declaration order of fields, sourced from the Reference, with an explicit statement that this is guaranteed rather than implementation-defined.",
+      "files": [],
+      "expectations": [
+        "The skill routed to 04_spec",
+        "The answer retrieved from the reference source",
+        "The answer explicitly labels the guarantee level",
+        "The answer quotes or closely paraphrases the normative text",
+        "The answer cites the Reference URL"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "I need a trie in Rust for autocomplete. Can you write one?",
+      "expected_output": "Notes that std has no trie, consults the worked-examples corpus for structure, and produces a compiling generic implementation that has been clippy-checked rather than copied verbatim.",
+      "files": [],
+      "expectations": [
+        "The skill routed to 08_implement",
+        "The answer checked whether std already provides this before implementing",
+        "The implementation compiles (verified with oxidize diagnose)",
+        "The implementation was clippy-checked rather than inheriting the example corpus's allow-list",
+        "If the algorithms corpus was consulted, it is cited as community code and not as canon",
+        "The answer does not present the example repository as authoritative on Rust idiom"
+      ]
+    }
+  ]
+}

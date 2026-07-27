@@ -1,0 +1,11 @@
+# The mirrored canon is generated from the local toolchain, ~250MB, and
+# version-specific. Rebuild it with scripts/mirror.py rather than committing it.
+/corpus/
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]

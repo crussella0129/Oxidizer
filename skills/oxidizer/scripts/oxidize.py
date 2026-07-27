@@ -14,6 +14,7 @@ Commands:
     api       <std::vec::Vec::retain>   one item or one method
     lint      <needless_range_loop>     one clippy lint
     diagnose  <file.rs|dir>     compile it, then retrieve docs for what broke
+    disk      [dir]             what build artifacts cost, and how to reclaim it
     manifest                    what is mirrored, and how fresh it is
 
 Every command accepts --max-tokens (default 2000) and --json.
@@ -770,6 +771,111 @@ def cmd_diagnose(c: Corpus, a) -> None:
     emit(payload, "\n".join(lines), a.json)
 
 
+def _dir_size(path: Path) -> tuple[int, int]:
+    """(bytes, files) under `path`, following no symlinks."""
+    total = files = 0
+    stack = [path]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                            files += 1
+                    except OSError:
+                        continue
+        except (OSError, PermissionError):
+            continue
+    return total, files
+
+
+def _human(n: int) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024.0
+    return f"{n:.1f}GiB"
+
+
+def cmd_disk(c: Corpus, a) -> None:
+    """Report what Rust build artifacts are costing, and how to reclaim it.
+
+    Deliberately read-only. Removing a build tree is cheap to undo but not free
+    — it costs a full rebuild — so the decision belongs to the user, not to us.
+    """
+    root = Path(a.path).resolve()
+    if not root.exists():
+        die(f"no such path: {root}")
+
+    lines = ["# Disk usage", ""]
+    payload: dict = {"path": str(root), "targets": [], "deletes_nothing": True}
+
+    corpus_bytes, corpus_files = _dir_size(c.root)
+    payload["corpus"] = {"path": str(c.root), "bytes": corpus_bytes}
+    rows: list[tuple[str, str, str]] = [
+        ("corpus", _human(corpus_bytes), f"{corpus_files} files  ({c.root})")
+    ]
+
+    # Cargo target directories, identified by the marker cargo writes.
+    targets: list[Path] = []
+    for tag in root.rglob("CACHEDIR.TAG"):
+        if tag.parent.name == "target":
+            targets.append(tag.parent)
+    if not targets and (root / "target").is_dir():
+        targets.append(root / "target")
+
+    grand = 0
+    for target in sorted(set(targets)):
+        size, files = _dir_size(target)
+        grand += size
+        incr, _ = _dir_size(target / "debug" / "incremental")
+        rel = target.relative_to(root) if target.is_relative_to(root) else target
+        rows.append((str(rel), _human(size), f"{files} files"
+                     + (f", incremental {_human(incr)}" if incr else "")))
+        payload["targets"].append(
+            {"path": str(target), "bytes": size, "files": files,
+             "incremental_bytes": incr})
+
+    registry = Path.home() / ".cargo" / "registry"
+    if registry.is_dir():
+        reg_bytes, _ = _dir_size(registry)
+        payload["cargo_registry_bytes"] = reg_bytes
+        rows.append(("~/.cargo/registry", _human(reg_bytes),
+                     "crate cache; `cargo clean` does not touch this"))
+
+    width = max(len(name) for name, _, _ in rows)
+    for name, size, note in rows:
+        lines.append(f"{name:<{width}}  {size:>10}  {note}")
+
+    threshold = a.threshold * 1024 * 1024
+    lines.append("")
+    if not targets:
+        lines.append("No cargo target directories under this path.")
+    elif grand < threshold:
+        lines.append(f"Build artifacts total {_human(grand)}, under the "
+                     f"{a.threshold}MiB threshold. Nothing worth reclaiming — "
+                     f"cleaning now would only cost a rebuild.")
+    else:
+        lines.append(f"Build artifacts total {_human(grand)}. Worth reclaiming "
+                     f"if you are done building here:\n")
+        for t in payload["targets"]:
+            manifest = Path(t["path"]).parent / "Cargo.toml"
+            where = f" --manifest-path {manifest}" if manifest.exists() else ""
+            lines.append(f"  cargo clean --dry-run{where}   # confirm first")
+            lines.append(f"  cargo clean --release{where}   # keep the dev cycle fast")
+            lines.append(f"  cargo clean{where}             # everything, incl. incremental")
+        lines.append("\nDo not clean a tree the user is still iterating on: it "
+                     "discards incremental state and turns the next build into a "
+                     "cold one. See references/disk-hygiene.md.")
+
+    payload["total_target_bytes"] = grand
+    emit(payload, "\n".join(lines), a.json)
+
+
 def cmd_manifest(c: Corpus, a) -> None:
     m = c.manifest
     tc = m.get("toolchain", {})
@@ -844,6 +950,14 @@ def main() -> int:
     p.add_argument("--clippy", action="store_true",
                    help="run clippy instead of rustc, for idiom review")
     p.set_defaults(fn=cmd_diagnose)
+
+    p = sub.add_parser("disk", parents=[common])
+    p.add_argument("path", nargs="?", default=".",
+                   help="directory to scan for cargo target/ trees")
+    p.add_argument("--threshold", type=int, default=500,
+                   help="MiB of build artifacts below which cleaning is not "
+                        "worth the rebuild (default 500)")
+    p.set_defaults(fn=cmd_disk)
 
     p = sub.add_parser("manifest", parents=[common]); p.set_defaults(fn=cmd_manifest)
 

@@ -27,6 +27,11 @@ The user has code the compiler rejects, or an error they do not understand.
 5. **Verify your fix compiles.** Apply it and re-run `diagnose`. A fix that
    trades E0502 for E0499 is not a fix, and this is common enough with borrow
    errors that checking is worth it every time.
+6. **Account for what you left behind.** On a Cargo project, `diagnose` runs
+   `cargo check`, which writes into `target/`. When the work is done, run
+   `oxidize disk` and offer the clean command — do not run it yourself, and do
+   not run it at all if the user is still iterating. See
+   `references/disk-hygiene.md`.
 
 ## Reading borrow-checker errors specifically
 

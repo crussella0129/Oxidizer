@@ -55,6 +55,16 @@ Be explicit with the user rather than improvising:
 - **Anything newer than the pinned toolchain.** `oxidize manifest` reports the
   version the mirror was built for and warns when the toolchain has moved.
 
+## Operational references
+
+Not sources — how the skill itself behaves.
+
+| File | Read it when |
+|---|---|
+| `references/corpus.md` | The corpus is missing, stale, or needs different sources |
+| `references/disk-hygiene.md` | Before cleaning any build tree; after a `diagnose` run |
+| `references/mwp-adaptation.md` | You need to know how this layout maps to the paper |
+
 ## Domain contracts
 
 `oxidize route` picks one of these. Each states its inputs, process, and outputs.

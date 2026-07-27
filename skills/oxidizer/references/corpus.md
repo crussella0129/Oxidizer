@@ -93,5 +93,10 @@ up in the Book.
 
 ## Size
 
-About 5,200 documents and ~8M tokens for the default set plus `--online`;
-roughly 250MB of markdown on disk from 750MB of HTML.
+5,263 documents and ~8.1M tokens for the default set plus `--online`: 39.6 MiB
+of markdown plus 7.7 MiB of `INDEX.json`, distilled from 750 MiB of HTML. (`du`
+reports 56 MiB, counting allocated blocks across 5,263 small files.)
+
+That is small enough to keep several corpora around for different toolchains if
+you need to. It is dwarfed by any Rust `target/` directory — see
+`disk-hygiene.md`, and `oxidize disk` for the current numbers.

@@ -258,6 +258,79 @@ def test_search() -> None:
                   id_part in hits[0]["id"], f"got {hits[0]['id']}")
 
 
+def test_disk() -> None:
+    section("10. Disk hygiene reporting")
+    rc, out = oxidize("disk", str(ROOT), "--json")
+    if rc != 0:
+        check("disk command runs", False, out[:300])
+        return
+    data = json.loads(out)
+
+    check("disk reports the corpus size", data["corpus"]["bytes"] > 1_000_000)
+    check("disk finds the MCP crate's target tree",
+          any("oxidizer-mcp" in t["path"] for t in data["targets"]),
+          f"found: {[t['path'] for t in data['targets']]}")
+
+    target = next((t for t in data["targets"] if "oxidizer-mcp" in t["path"]), None)
+    if target:
+        # Cross-check against cargo's own accounting, which is the authority.
+        manifest = Path(target["path"]).parent / "Cargo.toml"
+        proc = subprocess.run(
+            ["cargo", "clean", "--dry-run", "--manifest-path", str(manifest)],
+            capture_output=True, text=True)
+        reported = proc.stderr + proc.stdout
+        mib = target["bytes"] / 1024 / 1024
+        check("disk size agrees with `cargo clean --dry-run`",
+              f"{mib:.1f}MiB" in reported.replace(" ", ""),
+              f"we said {mib:.1f}MiB; cargo said: {reported.strip()[-90:]}")
+        check("disk breaks out incremental state",
+              target["incremental_bytes"] > 0)
+
+    check("disk advertises that it deletes nothing",
+          data.get("deletes_nothing") is True)
+
+    # The whole point: it must never remove anything.
+    before = sum(1 for _ in (ROOT / "mcp" / "oxidizer-mcp" / "target").rglob("*"))
+    oxidize("disk", str(ROOT))
+    after = sum(1 for _ in (ROOT / "mcp" / "oxidizer-mcp" / "target").rglob("*"))
+    check("disk leaves the build tree untouched", before == after,
+          f"{before} -> {after} entries")
+
+    # Below the threshold it should advise against cleaning, not for it.
+    rc, out = oxidize("disk", str(ROOT), "--threshold", "100000")
+    check("disk declines to recommend cleaning under the threshold",
+          "Nothing worth reclaiming" in out, out[-200:])
+
+    rc, out = oxidize("disk", str(FIXTURES))
+    check("disk handles a path with no target directory",
+          rc == 0 and "No cargo target directories" in out)
+
+
+def test_disk_guidance_documented() -> None:
+    section("11. Disk-hygiene guidance is wired into the skill")
+    ref = ROOT / "skills" / "oxidizer" / "references" / "disk-hygiene.md"
+    check("references/disk-hygiene.md exists", ref.exists())
+    if ref.exists():
+        body = ref.read_text()
+        check("guidance states the rebuild cost of cleaning",
+              "incremental" in body and "cold rebuild" in body.lower()
+              or "full one" in body.lower())
+        check("guidance covers targeted cleans",
+              all(f in body for f in ("--release", "--dry-run", "-p <crate>")))
+        check("guidance says not to clean someone's tree unasked",
+              "without being asked" in body.lower() or "ask before" in body.lower())
+
+    skill = (ROOT / "skills" / "oxidizer" / "SKILL.md").read_text()
+    check("SKILL.md tells the agent to offer rather than run the clean",
+          "Offer it rather than running it" in skill)
+    check("SKILL.md lists the disk command", "`disk [dir]`" in skill)
+
+    for domain in ("01_diagnose", "06_idiom"):
+        body = (ROOT / "skills" / "oxidizer" / "domains" / domain / "CONTEXT.md").read_text()
+        check(f"{domain} contract points at disk hygiene",
+              "oxidize disk" in body and "disk-hygiene.md" in body)
+
+
 def test_explain() -> None:
     section("9. explain")
     rc, out = oxidize("explain", "E0502", "--json")
@@ -326,7 +399,7 @@ class McpClient:
 
 
 def test_mcp() -> None:
-    section("10. MCP server over stdio")
+    section("12. MCP server over stdio")
     if not MCP_BIN.exists():
         check("MCP binary built", False,
               f"not found at {MCP_BIN} — run `cargo build` in mcp/oxidizer-mcp")
@@ -416,6 +489,8 @@ def main() -> int:
     test_budgets()
     test_search()
     test_explain()
+    test_disk()
+    test_disk_guidance_documented()
     if args.mcp:
         test_mcp()
 

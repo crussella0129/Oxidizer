@@ -131,6 +131,7 @@ Tools: `oxidizer_route`, `oxidizer_search`, `oxidizer_show`, `oxidizer_explain`,
 | `lint needless_range_loop` | What a lint wants, and how to silence it |
 | `search "<query>" [--source ...]` | Ranked candidates with token costs |
 | `show <source>/<id> [--section H]` | One document, or one section |
+| `disk [dir]` | What build artifacts cost, and the right `cargo clean` for them |
 | `manifest` | What is mirrored, and whether it is stale |
 
 Every command takes `--max-tokens` (default 2000) and `--json`. Truncation

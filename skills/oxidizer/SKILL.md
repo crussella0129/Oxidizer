@@ -40,6 +40,7 @@ Set `OXIDIZER_CORPUS` if the corpus is not at the repository's `corpus/`.
 | `lint needless_range_loop` | What a lint wants and how to silence it. |
 | `search "<query>" [--source ...]` | Locating the right document. Returns summaries, not sources. |
 | `show <source>/<id> [--section H]` | Reading one document, or one section of it. |
+| `disk [dir]` | What build artifacts cost, and the right command to reclaim it. |
 | `manifest` | What is mirrored and whether it is stale. |
 
 ## How to work
@@ -71,6 +72,19 @@ answer is in the part that got cut.
 **Cite what you used.** Every command prints the upstream `doc.rust-lang.org`
 URL for what it returned. Include it. The user should be able to check you.
 
+**Leave the disk as you found it.** `diagnose` runs `cargo check` or
+`cargo clippy` on the user's project, so using this skill grows their `target/`
+directory — routinely past 700MB for a project with a few dozen dependencies,
+which is roughly twenty times the size of the entire mirrored canon. When you
+are finished with a project, run `oxidize disk` and offer the `cargo clean`
+command it suggests.
+
+Offer it rather than running it. Cleaning is cheap to undo but not free — it
+discards incremental state and turns the next build into a cold one — so never
+clean a tree the user is still iterating on, and never clean one without asking.
+`references/disk-hygiene.md` has the full rule, including the targeted forms
+(`--release`, `--profile`, `-p`) that usually beat removing the whole tree.
+
 ## Answering
 
 Lead with the answer, then the evidence. For a compile error, say what the
@@ -96,8 +110,9 @@ corpus/               Layer 3  the mirrored canon (generated; see references/)
 
 Read `CONTEXT.md` when you need to choose a source by hand rather than via
 `route`. Read `references/corpus.md` when the corpus is missing, stale, or you
-need to change what is mirrored. Read `references/mwp-adaptation.md` for how
-this layout deviates from the paper and why.
+need to change what is mirrored. Read `references/disk-hygiene.md` before
+cleaning any build tree. Read `references/mwp-adaptation.md` for how this layout
+deviates from the paper and why.
 
 ## If the corpus is missing
 

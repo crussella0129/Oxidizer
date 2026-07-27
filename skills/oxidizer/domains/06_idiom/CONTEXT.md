@@ -10,6 +10,7 @@ The code works. The user wants it to look like Rust.
 | What a lint wants | `oxidize lint <name>` | For each lint fired |
 | Formatting and naming | `--source style-guide` | Naming or layout questions |
 | Manifest and features | `--source cargo` | `Cargo.toml`, features, workspaces |
+| Build artifact cost | `oxidize disk` | Wrapping up; clippy just built a full tree |
 
 ## Process
 
@@ -21,6 +22,10 @@ The code works. The user wants it to look like Rust.
 3. Re-run to confirm the fixes landed and introduced nothing new.
 4. Then look for the things clippy cannot see — see below.
 5. Run `cargo fmt` rather than hand-formatting. Never argue with rustfmt.
+6. `cargo clippy` builds a full artifact tree, which is larger than the one
+   `cargo check` leaves — an idiom pass is often the most expensive thing this
+   skill does to a user's disk. Finish with `oxidize disk` and offer the clean
+   command it prints. See `references/disk-hygiene.md`.
 
 ## What clippy will not tell you
 

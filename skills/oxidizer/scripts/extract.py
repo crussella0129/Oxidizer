@@ -457,6 +457,35 @@ def rust_source_to_markdown(source: str, title: str) -> tuple[str, list[str], li
     return "\n".join(parts), headings, items
 
 
+# -- tokenisation ---------------------------------------------------------
+#
+# Indexing and querying must tokenise identically or terms silently fail to
+# match, so both sides call this. Identifiers are also split on `_` and at
+# camelCase boundaries, and the parts indexed alongside the whole: a search for
+# "capacity" should find `with_capacity`, and "sort key" should find
+# `sort_by_key`.
+
+_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
+_CAMEL_RE = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])")
+
+
+def tokenize(text: str, split_identifiers: bool = True) -> list[str]:
+    out: list[str] = []
+    for raw in _TOKEN_RE.findall(text):
+        low = raw.lower()
+        if len(low) > 1:
+            out.append(low)
+        if not split_identifiers:
+            continue
+        if "_" in raw:
+            out.extend(p for p in low.split("_") if len(p) > 1)
+        elif not raw.islower() and not raw.isupper():
+            parts = _CAMEL_RE.findall(raw)
+            if len(parts) > 1:
+                out.extend(p.lower() for p in parts if len(p) > 1)
+    return out
+
+
 def estimate_tokens(text: str) -> int:
     """~4 chars per token. Deliberately cheap: this runs over 5k+ documents.
 

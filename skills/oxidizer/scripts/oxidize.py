@@ -33,6 +33,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from extract import tokenize  # noqa: E402
+
 DEFAULT_BUDGET = 2000
 
 # Which sources answer which kind of question. Mirrors domains/*/CONTEXT.md;
@@ -126,14 +129,6 @@ ROUTING: list[dict] = [
     },
 ]
 
-STOPWORDS = {
-    "the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "in", "on",
-    "for", "and", "or", "it", "this", "that", "with", "as", "at", "by", "from",
-    "how", "what", "why", "do", "does", "did", "can", "i", "my", "me", "you",
-    "rust", "code", "use", "using", "get", "make",
-}
-
-
 # --------------------------------------------------------------------------
 # corpus access
 
@@ -194,6 +189,22 @@ class Corpus:
             docs.sort(key=lambda d: (rank.get(d.get("kind"), 6), len(d["path"])))
         return out
 
+    @functools.cached_property
+    def postings(self) -> dict:
+        """Full-text inverted index, built by mirror.py.
+
+        Absent on a corpus built before postings existed; search degrades to
+        field matching rather than failing, and says so.
+        """
+        path = self.root / "POSTINGS.json"
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text())
+
+    @functools.cached_property
+    def by_key(self) -> dict[str, dict]:
+        return {f"{d['source']}/{d['id']}": d for d in self.docs}
+
     def read(self, doc: dict) -> str:
         text = (self.root / doc["source"] / doc["file"]).read_text(encoding="utf-8")
         return re.sub(r"^<!-- oxidizer:.*?-->\n\n", "", text, flags=re.S)
@@ -218,11 +229,6 @@ def die(msg: str) -> None:
 
 def tokens_of(text: str) -> int:
     return max(1, len(text) // 4)
-
-
-def terms(query: str) -> list[str]:
-    words = re.findall(r"[A-Za-z_][A-Za-z_0-9]+", query.lower())
-    return [w for w in words if w not in STOPWORDS and len(w) > 1]
 
 
 def budget_text(text: str, max_tokens: int) -> tuple[str, bool]:
@@ -255,14 +261,152 @@ def emit(payload: dict, text: str, as_json: bool) -> None:
 
 # --------------------------------------------------------------------------
 # search
+#
+# Retrieval is BM25 over full document bodies plus a boost for matches in
+# high-signal fields. The previous scheme indexed only titles, headings and the
+# 80 most frequent body terms, which measured at precision@1 of 0/10 on
+# naturally-phrased questions: a user who asks "why can't I use this vector
+# after passing it to a function" shares almost no vocabulary with the chapter
+# that answers them, which is called "What Is Ownership?".
+#
+# BM25's length normalisation also fixes a second measured problem. std pages
+# carry hundreds of member names, so under a flat field-weight scheme they
+# matched almost any query and took 17 of 34 top results in a survey.
 
-
-# Boilerplate rustdoc emits as headings on essentially every page. Left in, a
-# query for "trait objects" scores every std type equally on the word "trait".
 _HEADING_NOISE = re.compile(
     r"\b(?:trait implementations|implementations|auto trait implementations|"
     r"blanket implementations|methods from deref|examples|panics|errors|safety|"
     r"required methods|provided methods|implementors|members|aliased type)\b")
+
+# Question scaffolding. Left in, "difference between anyhow and thiserror"
+# retrieves std::collections::btree_set::Difference on the word "difference",
+# and "errors in a library vs an application" retrieves "Cargo.toml vs
+# Cargo.lock" on the word "vs". Both were real results.
+STOPWORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "to",
+    "of", "in", "on", "for", "and", "or", "it", "this", "that", "with", "as",
+    "at", "by", "from", "how", "what", "why", "when", "where", "do", "does",
+    "did", "can", "could", "should", "would", "will", "i", "my", "me", "you",
+    "your", "we", "our", "rust", "code", "use", "using", "used", "get", "make",
+    "difference", "between", "vs", "versus", "way", "ways", "best", "good",
+    "want", "need", "trying", "try", "help", "please", "something", "thing",
+    "things", "any", "some", "all", "into", "about", "there", "here", "have",
+    "has", "but", "not", "if", "then", "than", "so", "just", "only", "also",
+    "work", "works", "working", "handle", "handling", "mean", "means", "one",
+    "two", "let", "like", "know", "tell", "show", "give", "take", "put",
+}
+
+# What users say -> what the canon calls it. This is the only fix for the
+# largest measured failure class: the words in the question are simply absent
+# from the document that answers it, so no amount of reweighting can surface
+# it. Expansions are scored at a discount so they widen recall without
+# overriding the user's own wording.
+ALIASES: dict[str, tuple[str, ...]] = {
+    # ownership and borrowing
+    "passing": ("move", "ownership", "transfer"),
+    "passed": ("move", "ownership"),
+    "giving": ("move", "ownership"),
+    "gave": ("move", "ownership"),
+    "consumed": ("move", "ownership", "drop"),
+    "reuse": ("move", "ownership", "borrow"),
+    "again": ("move", "borrow"),
+    "copy": ("clone", "copy", "move"),
+    "freed": ("drop", "deallocate", "scope"),
+    "dangling": ("lifetime", "borrow", "dangling"),
+    "outlives": ("lifetime", "outlives"),
+    "escape": ("lifetime", "borrow", "scope"),
+    # lifetimes: users write the syntax, not the concept name
+    "'a": ("lifetime", "annotation", "generic"),
+    "tick": ("lifetime", "annotation"),
+    "apostrophe": ("lifetime", "annotation"),
+    "annotation": ("lifetime", "generic"),
+    # mutability
+    "change": ("mutable", "mutability", "borrow"),
+    "modify": ("mutable", "mutability", "borrow"),
+    "mutate": ("mutable", "mutability"),
+    "immutable": ("mutable", "borrow", "reference"),
+    # concurrency
+    "threads": ("thread", "concurrency", "send", "sync"),
+    "thread": ("thread", "concurrency", "spawn"),
+    "share": ("shared", "arc", "mutex", "state"),
+    "shared": ("arc", "mutex", "state", "sync"),
+    "counter": ("mutex", "arc", "atomic", "shared"),
+    "parallel": ("thread", "concurrency", "spawn"),
+    "concurrently": ("concurrency", "async", "spawn", "join"),
+    "lock": ("mutex", "rwlock", "guard"),
+    # async
+    "await": ("async", "future", "poll"),
+    "asynchronous": ("async", "future"),
+    "blocking": ("async", "thread", "block"),
+    # strings
+    "string": ("string", "str", "utf8", "chars"),
+    "text": ("string", "str", "utf8"),
+    "characters": ("chars", "utf8", "grapheme"),
+    "substring": ("slice", "str", "chars"),
+    # collections and iteration
+    "vector": ("vec", "vector", "slice"),
+    "array": ("array", "slice", "vec"),
+    "list": ("vec", "slice", "linked"),
+    "dictionary": ("hashmap", "map", "btreemap"),
+    "map": ("hashmap", "map", "btreemap"),
+    "sort": ("sort", "sort_by", "sort_by_key", "ord"),
+    "sorting": ("sort", "sort_by_key", "ord"),
+    "iterate": ("iterator", "iter", "loop", "next"),
+    "iterating": ("iterator", "iter", "enumerate"),
+    "index": ("index", "indexing", "enumerate", "position"),
+    "group": ("entry", "hashmap", "fold", "collect"),
+    "filter": ("filter", "iterator", "retain"),
+    # errors
+    "error": ("error", "result", "err"),
+    "errors": ("error", "result", "err"),
+    "failure": ("error", "result", "panic"),
+    "crash": ("panic", "unwrap", "abort"),
+    "propagate": ("question", "result", "from", "error"),
+    # traits and generics
+    "interface": ("trait", "impl", "dyn"),
+    "inheritance": ("trait", "composition", "dyn"),
+    "generic": ("generic", "trait", "bound"),
+    "constraint": ("bound", "where", "trait"),
+    "polymorphism": ("trait", "dyn", "generic"),
+    # memory and performance
+    "allocating": ("allocation", "heap", "capacity", "reserve"),
+    "allocation": ("heap", "capacity", "with_capacity", "reserve"),
+    "faster": ("performance", "capacity", "reserve", "inline"),
+    "memory": ("heap", "stack", "allocation", "drop"),
+    # project mechanics
+    "file": ("module", "mod", "crate", "path"),
+    "files": ("module", "mod", "crate"),
+    "import": ("use", "path", "module"),
+    "visibility": ("pub", "private", "module"),
+    "dependency": ("dependencies", "cargo", "crate"),
+    "feature": ("features", "cargo", "cfg"),
+    "test": ("test", "tests", "assert"),
+    "testing": ("test", "tests", "assert"),
+    "benchmark": ("bench", "profile", "release"),
+    # ffi / unsafe
+    "c": ("ffi", "extern", "unsafe"),
+    "pointer": ("pointer", "raw", "unsafe", "reference"),
+}
+
+# Widely used crates that are deliberately not mirrored. Naming one is a
+# reliable signal that the canon cannot answer the question, and saying so is
+# far better than returning the closest-looking std page.
+NON_CANON_CRATES = {
+    "serde", "serde_json", "tokio", "anyhow", "thiserror", "clap", "rayon",
+    "reqwest", "axum", "actix", "hyper", "tracing", "log", "env_logger",
+    "regex", "chrono", "time", "uuid", "rand", "itertools", "futures",
+    "async_std", "crossbeam", "parking_lot", "bytes", "nom", "syn", "quote",
+    "proc_macro2", "diesel", "sqlx", "bevy", "egui", "wgpu", "criterion",
+    "proptest", "quickcheck", "mockall", "eyre", "color_eyre", "smallvec",
+    "indexmap", "dashmap", "once_cell", "lazy_static", "num", "ndarray",
+    "polars", "petgraph", "image", "ratatui", "crossterm", "pyo3", "wasm_bindgen",
+}
+
+K1 = 1.2   # BM25 term-frequency saturation
+B = 0.75   # BM25 length normalisation
+
+_FIELD_BOOST = {"title": 3.0, "path": 2.5, "members": 2.0, "heads": 1.5,
+                "doc_id": 1.5, "summary": 0.5}
 
 
 def doc_fields(doc: dict) -> dict[str, str]:
@@ -281,95 +425,223 @@ def doc_fields(doc: dict) -> dict[str, str]:
         "heads": _HEADING_NOISE.sub(" ", heads),
         "members": " ".join(doc.get("members", [])).lower(),
         "summary": (doc.get("summary") or "").lower(),
-        "keywords": " ".join(doc.get("keywords", [])),
     }
 
 
-_FIELD_WEIGHT = {"title": 10.0, "path": 8.0, "doc_id": 5.0,
-                 "heads": 3.0, "members": 6.0, "summary": 2.0, "keywords": 1.5}
+def terms(query: str) -> list[str]:
+    """Content terms of a query, in order, without duplicates."""
+    out: list[str] = []
+    for tok in tokenize(query):
+        if tok not in STOPWORDS and len(tok) > 1 and tok not in out:
+            out.append(tok)
+    return out
 
 
-def compute_idf(qterms: list[str], fields: list[dict[str, str]]) -> dict[str, float]:
-    """Inverse document frequency for the query terms over the search pool.
+def expand(qterms: list[str], query: str) -> dict[str, float]:
+    """Query terms mapped to a weight; alias expansions are discounted."""
+    weighted = {t: 1.0 for t in qterms}
+    # Lifetime syntax survives neither tokenisation nor stopwords.
+    if re.search(r"'\s*[a-z]\b", query):
+        for t in ("lifetime", "annotation"):
+            weighted.setdefault(t, 0.45)
+    for t in list(qterms):
+        for alias in ALIASES.get(t, ()):
+            if alias not in weighted:
+                weighted[alias] = 0.45
+    return weighted
 
-    Without this a word like "trait" or "iterator" — which literally appears on
-    every page of std — outweighs the rare word that actually identifies what
-    the user is asking about.
-    """
-    n = max(1, len(fields))
-    idf: dict[str, float] = {}
-    for t in qterms:
-        df = sum(1 for f in fields if any(t in blob for blob in f.values()))
-        idf[t] = math.log(1 + n / (1 + df))
-    return idf
+
+def detect_non_canon(query: str) -> list[str]:
+    found = []
+    for tok in tokenize(query):
+        if tok in NON_CANON_CRATES and tok not in found:
+            found.append(tok)
+    return found
 
 
-def score(doc: dict, qterms: list[str], phrase: str,
-          idf: dict[str, float], fields: dict[str, str] | None = None) -> float:
-    f = fields or doc_fields(doc)
-
-    s = 0.0
-    matched = 0
-    for t in qterms:
-        w = idf.get(t, 1.0)
-        hit = False
-        for name, weight in _FIELD_WEIGHT.items():
-            blob = f[name]
-            if not blob or t not in blob:
+def bm25(c: Corpus, weighted: dict[str, float],
+         allowed: set[int] | None) -> dict[int, float]:
+    """BM25 over document bodies, restricted to `allowed` doc ordinals."""
+    post = c.postings
+    if not post:
+        return {}
+    lengths = post["lengths"]
+    avg = post["avg_length"] or 1.0
+    n = len(post["docs"])
+    scores: dict[int, float] = {}
+    for term, weight in weighted.items():
+        plist = post["terms"].get(term)
+        if not plist:
+            continue
+        df = len(plist)
+        idf = math.log(1 + (n - df + 0.5) / (df + 0.5))
+        for ordinal, tf in plist:
+            if allowed is not None and ordinal not in allowed:
                 continue
-            # Whole-word matches are worth more than incidental substrings
-            # ("map" inside "unwrap_or", "vec" inside "vecdeque").
-            exact = re.search(rf"(?:^|[^a-z0-9_]){re.escape(t)}(?:[^a-z0-9_]|$)", blob)
-            s += weight * w * (1.0 if exact else 0.35)
-            hit = True
-        if hit:
-            matched += 1
+            dl = lengths[ordinal] or 1
+            denom = tf + K1 * (1 - B + B * dl / avg)
+            scores[ordinal] = scores.get(ordinal, 0.0) + weight * idf * (tf * (K1 + 1)) / denom
+    return scores
 
-    if phrase and len(phrase) > 4:
-        if phrase in f["title"]:
-            s += 25
-        elif phrase in f["heads"]:
-            s += 12
-        elif phrase in f["summary"]:
-            s += 6
 
-    if s and qterms:
-        # Reward covering more of the query rather than hammering one term.
-        s *= 0.35 + 0.65 * (matched / len(qterms))
-    # Index/landing pages are rarely the answer.
-    if doc["id"].endswith("index") or doc.get("kind") == "module":
-        s *= 0.55
-    return s
+def field_bonus(fields: dict[str, str], weighted: dict[str, float]) -> float:
+    bonus = 0.0
+    for term, weight in weighted.items():
+        for name, boost in _FIELD_BOOST.items():
+            blob = fields.get(name) or ""
+            if not blob or term not in blob:
+                continue
+            exact = re.search(rf"(?:^|[^a-z0-9_]){re.escape(term)}(?:[^a-z0-9_]|$)", blob)
+            bonus += boost * weight * (1.0 if exact else 0.3)
+    return bonus
+
+
+def search_corpus(c: Corpus, query: str, sources: list[str], limit: int,
+                  prefer: list[str] | None = None) -> tuple[list[tuple[float, dict]], dict]:
+    """Ranked hits plus a diagnosis of how much to trust them.
+
+    `sources` is a hard filter; `prefer` is a soft prior from routing. Routing
+    is only a guess — "why can't I index into a String" routes to 03_api on the
+    word String, and hard-filtering to std would then make the Book chapter that
+    actually answers it unreachable. Boosting instead helps when routing is
+    right and costs little when it is wrong.
+    """
+    qterms = terms(query)
+    if not qterms:
+        return [], {"confidence": "none", "reason": "query has no content terms"}
+    weighted = expand(qterms, query)
+
+    allowed: set[int] | None = None
+    if sources:
+        allowed = {i for i, key in enumerate(c.postings["docs"])
+                   if key.split("/", 1)[0] in sources}
+        if not allowed:
+            return [], {"confidence": "none",
+                        "reason": f"no documents for source(s): {', '.join(sources)}"}
+
+    raw = bm25(c, weighted, allowed)
+    if not raw:
+        return [], {"confidence": "none",
+                    "reason": "no document contains any of the query terms",
+                    "non_canon": detect_non_canon(query)}
+
+    by_key = c.by_key
+    phrase = query.lower().strip()
+    scored: list[tuple[float, dict]] = []
+    for ordinal, base in sorted(raw.items(), key=lambda kv: -kv[1])[: limit * 12]:
+        doc = by_key.get(c.postings["docs"][ordinal])
+        if doc is None:
+            continue
+        f = doc_fields(doc)
+        total = base + field_bonus(f, weighted)
+        if len(phrase) > 8 and phrase in f["title"]:
+            total += 8.0
+        if doc["id"].endswith("index") or doc.get("kind") == "module":
+            total *= 0.6
+        if prefer and doc["source"] in prefer:
+            total *= 1.4
+        scored.append((total, doc))
+    scored.sort(key=lambda x: -x[0])
+    hits = scored[:limit]
+
+    diag = assess(c, hits, qterms, query)
+    return hits, diag
+
+
+def assess(c: Corpus, hits: list[tuple[float, dict]], qterms: list[str],
+           query: str) -> dict:
+    """How much of the question the best hit actually covers.
+
+    Raw scores are not comparable across queries or across `--source` filters,
+    so they are useless as a confidence signal — a wrong answer once scored 58
+    while a right one scored 27. Term coverage is comparable, and is what gets
+    reported.
+    """
+    non_canon = detect_non_canon(query)
+    if not hits:
+        return {"confidence": "none", "coverage": 0.0, "non_canon": non_canon,
+                "reason": "nothing matched"}
+
+    top_score, top = hits[0]
+    post = c.postings
+    try:
+        ordinal = post["docs"].index(f"{top['source']}/{top['id']}")
+    except ValueError:
+        ordinal = None
+    covered = 0
+    for t in qterms:
+        plist = post["terms"].get(t) or []
+        if ordinal is not None and any(o == ordinal for o, _ in plist):
+            covered += 1
+    coverage = covered / max(1, len(qterms))
+    gap = 1.0 if len(hits) < 2 else (top_score - hits[1][0]) / max(top_score, 1e-6)
+
+    if non_canon:
+        level = "low"
+        reason = (f"question names {', '.join(non_canon)}, which the canon does "
+                  f"not cover — say so rather than substituting a std page")
+    elif coverage >= 0.6:
+        level, reason = "high", "top result contains most of the question's terms"
+    elif coverage >= 0.34:
+        level, reason = "medium", "top result contains some of the question's terms"
+    else:
+        level = "low"
+        reason = ("top result contains few of the question's terms; the canon "
+                  "may not answer this")
+    return {"confidence": level, "coverage": round(coverage, 2),
+            "gap": round(gap, 2), "matched_terms": covered,
+            "query_terms": len(qterms), "non_canon": non_canon, "reason": reason}
+
+
+def routed_sources(c: Corpus, query: str) -> list[str]:
+    """Sources the routing table considers authoritative for this question."""
+    available = {s["id"] for s in c.manifest["sources"]}
+    best, best_n = [], 0
+    for rule in ROUTING:
+        n = sum(1 for pat in rule["triggers"] if re.search(pat, query, re.I))
+        if n > best_n:
+            best, best_n = [s for s in rule["sources"] if s in available], n
+    return best
 
 
 def cmd_search(c: Corpus, a) -> None:
-    qterms = terms(a.query)
-    if not qterms:
-        die("query has no searchable terms")
-    phrase = a.query.lower().strip()
-    pool = [d for d in c.docs if not a.source or d["source"] in a.source]
-    if not pool:
-        die(f"no documents for source(s): {', '.join(a.source)}")
+    sources = list(a.source)
+    prefer: list[str] = []
+    if getattr(a, "auto", False):
+        prefer = routed_sources(c, a.query)
 
-    fields = [doc_fields(d) for d in pool]
-    idf = compute_idf(qterms, fields)
-    ranked = sorted(((score(d, qterms, phrase, idf, f), d)
-                     for d, f in zip(pool, fields)), key=lambda x: -x[0])
-    hits = [(s, d) for s, d in ranked if s > 0][: a.limit]
-    if not hits:
-        emit({"query": a.query, "hits": []},
-             f"No matches for {a.query!r}. Try fewer or more general terms.", a.json)
-        return
+    hits, diag = search_corpus(c, a.query, sources, a.limit, prefer)
 
     payload = {
-        "query": a.query,
+        "query": a.query, "sources": sources, "preferred": prefer,
+        **{k: v for k, v in diag.items() if k != "reason"},
+        "assessment": diag.get("reason", ""),
         "hits": [{
             "rank": i, "score": round(s, 1), "source": d["source"], "id": d["id"],
             "title": d["title"], "path": d.get("path"), "tokens": d["tokens"],
             "url": d["url"], "summary": d.get("summary", ""),
         } for i, (s, d) in enumerate(hits, 1)],
     }
-    lines = [f"{len(hits)} hit(s) for {a.query!r}\n"]
+
+    if not hits:
+        msg = [f"No matches for {a.query!r}.", diag.get("reason", "")]
+        if diag.get("non_canon"):
+            msg.append(f"\n{', '.join(diag['non_canon'])} is a third-party crate. "
+                       f"Oxidizer mirrors only the Rust canon — say the canon does "
+                       f"not cover it rather than guessing from std.")
+        emit(payload, "\n".join(m for m in msg if m), a.json)
+        return
+
+    lines = [f"{len(hits)} hit(s) for {a.query!r}"]
+    if prefer:
+        lines.append(f"routing prefers (boosted, not restricted): {', '.join(prefer)}")
+    lines.append(f"confidence: {diag['confidence']} "
+                 f"({diag['matched_terms']}/{diag['query_terms']} query terms in "
+                 f"the top result) — {diag['reason']}")
+    if diag.get("non_canon"):
+        lines.append(f"NOT IN CANON: {', '.join(diag['non_canon'])}. Do not "
+                     f"substitute a std page; say the canon does not cover it.")
+    lines.append("")
     for h in payload["hits"]:
         lines.append(f"[{h['rank']}] {h['title']}   ({h['source']}, ~{h['tokens']} tok)")
         lines.append(f"    show: oxidize show {h['source']}/{h['id']}")
@@ -446,16 +718,12 @@ def cmd_explain(c: Corpus, a) -> None:
     text, truncated = budget_text(md, a.max_tokens)
     # Point at the prose that explains the rule the compiler enforced. The
     # error index says what went wrong; the Book and Reference say why.
-    prose = [d for d in c.docs
-             if d["source"] in ("book", "reference", "nomicon", "brown-book")]
-    qterms = terms(doc.get("summary", ""))[:8]
-    related = []
-    if qterms and prose:
-        pfields = [doc_fields(d) for d in prose]
-        pidf = compute_idf(qterms, pfields)
-        scored = sorted(((score(d, qterms, "", pidf, f), d)
-                         for d, f in zip(prose, pfields)), key=lambda x: -x[0])
-        related = [d for s, d in scored[:3] if s > 0]
+    summary = doc.get("summary", "")
+    related: list[dict] = []
+    if summary:
+        prose_hits, _ = search_corpus(
+            c, summary, ["book", "reference", "nomicon"], 3)
+        related = [d for _, d in prose_hits]
     payload = {"code": code, "url": doc["url"], "truncated": truncated,
                "tokens_returned": tokens_of(text), "content": text,
                "related": [{"id": f"{d['source']}/{d['id']}", "title": d["title"]}
@@ -944,6 +1212,9 @@ def main() -> int:
     p.add_argument("query")
     p.add_argument("--source", nargs="*", default=[])
     p.add_argument("--limit", type=int, default=5)
+    p.add_argument("--auto", action="store_true",
+                   help="scope to the sources the routing table considers "
+                        "authoritative for this question")
     p.set_defaults(fn=cmd_search)
 
     p = sub.add_parser("show", parents=[common])

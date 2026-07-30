@@ -39,6 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from extract import (  # noqa: E402
     estimate_tokens,
+    tokenize,
     html_to_markdown,
     rust_source_to_markdown,
     rustdoc_kind_and_path,
@@ -174,53 +175,6 @@ STUB_RE = re.compile(
 )
 STUB_MAX_TOKENS = 200
 
-# Titles and headings alone miss body-only vocabulary — "shared_ptr" appears
-# nowhere in the phrasebook's headings, only in its prose. Storing the most
-# distinctive body terms per document keeps search useful without carrying a
-# full inverted index (which would be an order of magnitude larger on disk).
-KEYWORD_LIMIT = 80
-_WORD_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
-_COMMON = {
-    "the", "and", "for", "that", "this", "with", "you", "are", "not", "can",
-    "will", "have", "has", "but", "all", "any", "its", "from", "when", "which",
-    "what", "how", "why", "into", "than", "then", "them", "they", "your", "our",
-    "use", "used", "using", "one", "two", "also", "more", "most", "some", "such",
-    "only", "other", "same", "each", "here", "there", "these", "those", "would",
-    "could", "should", "must", "may", "might", "does", "did", "was", "were",
-    "been", "being", "let", "value", "values", "type", "types", "example",
-    "examples", "code", "rust", "see", "note", "like", "want", "need", "make",
-    "get", "set", "new", "first", "last", "case", "way", "time", "run",
-}
-
-
-def body_keywords(md: str, limit: int = KEYWORD_LIMIT) -> list[str]:
-    """Most distinctive words in a document body, by frequency.
-
-    Identifier-shaped tokens (snake_case, CamelCase) are always kept: they are
-    exactly the terms someone searches for and are rare enough that frequency
-    ranking alone would sometimes drop them.
-    """
-    counts: dict[str, int] = {}
-    for w in _WORD_RE.findall(md):
-        lw = w.lower()
-        if len(lw) < 3 or lw in _COMMON:
-            continue
-        counts[lw] = counts.get(lw, 0) + 1
-    identifiers = {w.lower() for w in _WORD_RE.findall(md)
-                   if ("_" in w and len(w) > 3)
-                   or (len(w) > 3 and not w.islower() and not w.isupper())}
-    ranked = sorted(counts, key=lambda w: -counts[w])
-    keep = [w for w in ranked if w in identifiers][: limit // 2]
-    for w in ranked:
-        if len(keep) >= limit:
-            break
-        if w not in keep:
-            keep.append(w)
-    return sorted(keep)
-
-
-# --------------------------------------------------------------------------
-# toolchain discovery
 
 
 def rust_doc_root() -> Path | None:
@@ -312,7 +266,6 @@ def _convert_page(args: tuple) -> dict | None:
     body = re.sub(r"```.*?```", "", body, flags=re.S)
     para = next((p.strip() for p in body.split("\n\n") if len(p.strip()) > 60), "")
     entry["summary"] = re.sub(r"\s+", " ", para)[:400]
-    entry["keywords"] = body_keywords(md)
 
     out_file = out_dir / (doc_id + ".md")
     out_file.parent.mkdir(parents=True, exist_ok=True)
@@ -463,7 +416,6 @@ def build_lints_source(corpus: Path, quiet: bool) -> dict | None:
             "id": doc_id, "source": "lints", "kind": "lint",
             "title": canonical, "path": canonical,
             "headings": [canonical], "summary": meaning[:400],
-            "keywords": body_keywords(body + " " + canonical.replace("_", " ")),
             "url": url, "tokens": estimate_tokens(body), "file": f"{doc_id}.md",
             "level": level, "tool": tool,
         })
@@ -670,7 +622,6 @@ def build_algorithms_source(spec: str, corpus: Path, quiet: bool) -> dict | None
             "title": title, "path": title,
             "headings": headings[:40], "members": public,
             "summary": re.sub(r"\s+", " ", summary)[:400],
-            "keywords": body_keywords(md + " " + doc_id.replace("/", " ")),
             "url": url, "tokens": estimate_tokens(md), "file": doc_id + ".md",
             "category": category,
         })
@@ -766,7 +717,6 @@ def crawl_online(src_id: str, meta: dict, corpus: Path, quiet: bool) -> dict | N
                 "title": headings[0][1] if headings else doc_id,
                 "headings": [h for _, h in headings[:40]],
                 "summary": re.sub(r"\s+", " ", para)[:400],
-                "keywords": body_keywords(md),
                 "url": url, "tokens": estimate_tokens(md), "file": doc_id + ".md",
             })
 
@@ -796,6 +746,69 @@ def crawl_online(src_id: str, meta: dict, corpus: Path, quiet: bool) -> dict | N
 
 
 # --------------------------------------------------------------------------
+
+
+def build_postings(corpus: Path, sources: list[dict], quiet: bool) -> dict:
+    """Build a full-text inverted index over document bodies.
+
+    The per-document keyword lists this replaces kept only the 80 most frequent
+    body terms, which measured badly: a question phrased in the user's own words
+    rather than the document's title would routinely miss the right page
+    entirely. With 5,657 documents the whole postings table is ~750k entries, so
+    a plain term-major JSON file is small enough to load per invocation and is
+    read identically by the Python CLI and the Rust MCP server — no database
+    engine, and no dependency on either side.
+    """
+    doc_keys: list[str] = []
+    lengths: list[int] = []
+    terms: dict[str, list[list[int]]] = {}
+
+    for src in sources:
+        idx = corpus / src["id"] / "INDEX.json"
+        if not idx.exists():
+            continue
+        for entry in json.loads(idx.read_text())["docs"]:
+            path = corpus / src["id"] / entry["file"]
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            # Field text is indexed too, so a title word still counts as a body
+            # hit; the field-level boost is applied separately at query time.
+            text += " " + entry.get("title", "") + " " + " ".join(entry.get("headings", []))
+            tokens = tokenize(text)
+            if not tokens:
+                continue
+            ordinal = len(doc_keys)
+            doc_keys.append(f"{src['id']}/{entry['id']}")
+            lengths.append(len(tokens))
+            counts: dict[str, int] = {}
+            for tok in tokens:
+                counts[tok] = counts.get(tok, 0) + 1
+            for term, tf in counts.items():
+                terms.setdefault(term, []).append([ordinal, tf])
+
+    # Terms in nearly every document carry no signal and cost the most space.
+    n = max(1, len(doc_keys))
+    dropped = [t for t, p in terms.items() if len(p) > n * 0.55]
+    for t in dropped:
+        del terms[t]
+
+    postings = {
+        "schema": 1,
+        "docs": doc_keys,
+        "lengths": lengths,
+        "avg_length": sum(lengths) / n,
+        "terms": terms,
+    }
+    out = corpus / "POSTINGS.json"
+    out.write_text(json.dumps(postings, separators=(",", ":")), encoding="utf-8")
+    if not quiet:
+        size = out.stat().st_size / 1024 / 1024
+        print(f"\n  postings         {len(terms):5d} terms over {len(doc_keys)} docs "
+              f"({size:.1f}MiB, {sum(len(p) for p in terms.values())} entries; "
+              f"dropped {len(dropped)} near-universal terms)", file=sys.stderr)
+    return {"terms": len(terms), "postings": sum(len(p) for p in terms.values())}
 
 
 def corpus_dir() -> Path:
@@ -918,8 +931,11 @@ def main() -> int:
         merged[s["id"]] = s
     built = sorted(merged.values(), key=lambda s: s["id"])
 
+    stats = build_postings(corpus, built, args.quiet)
+
     manifest = {
         "schema_version": SCHEMA_VERSION,
+        "postings": stats,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "toolchain": toolchain_info(),
         "doc_root": str(html_root),

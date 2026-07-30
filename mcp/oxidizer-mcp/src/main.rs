@@ -186,6 +186,27 @@ const ROUTING: &[Rule] = &[
     },
 ];
 
+/// Sources the routing table considers authoritative for a question.
+fn routed_sources(corpus: &Corpus, query: &str) -> Vec<String> {
+    let q = query.to_lowercase();
+    let available: Vec<&str> = corpus.manifest.sources.iter().map(|s| s.id.as_str()).collect();
+    let mut best: Vec<String> = Vec::new();
+    let mut best_n = 0usize;
+    for rule in ROUTING {
+        let n = rule.triggers.iter().filter(|t| q.contains(**t)).count();
+        if n > best_n {
+            best_n = n;
+            best = rule
+                .sources
+                .iter()
+                .filter(|s| available.contains(s))
+                .map(|s| (*s).to_string())
+                .collect();
+        }
+    }
+    best
+}
+
 // -- server ----------------------------------------------------------------
 
 #[derive(Clone)]
@@ -292,15 +313,55 @@ impl Oxidizer {
     )]
     fn search(&self, Parameters(args): Parameters<SearchArgs>) -> Result<CallToolResult, McpError> {
         let limit = args.limit.clamp(1, 25);
-        let hits = self.corpus.search(&args.query, &args.sources, limit);
+        // Routing is a soft prior here, not a filter: hard-scoping to the
+        // routed sources makes the right document unreachable whenever the
+        // routing guess is wrong.
+        let prefer: Vec<String> = if args.sources.is_empty() {
+            routed_sources(&self.corpus, &args.query)
+        } else {
+            Vec::new()
+        };
+        let (hits, diag) = self
+            .corpus
+            .search(&args.query, &args.sources, limit, &prefer);
+
         if hits.is_empty() {
-            return text_result(format!(
-                "No matches for {:?}. Try fewer or more general terms, or drop the \
-                 source filter.",
-                args.query
+            let mut msg = format!("No matches for {:?}. {}", args.query, diag.reason);
+            if !diag.non_canon.is_empty() {
+                msg.push_str(&format!(
+                    "\n\n{} is a third-party crate. Oxidizer mirrors only the Rust \
+                     canon — say the canon does not cover it rather than guessing \
+                     from std.",
+                    diag.non_canon.join(", ")
+                ));
+            }
+            return text_result(msg);
+        }
+
+        let mut out = format!("{} hit(s) for {:?}\n", hits.len(), args.query);
+        if !prefer.is_empty() {
+            out.push_str(&format!(
+                "routing prefers (boosted, not restricted): {}\n",
+                prefer.join(", ")
             ));
         }
-        let mut out = format!("{} hit(s) for {:?}\n\n", hits.len(), args.query);
+        out.push_str(&format!(
+            "confidence: {} (coverage {:.0}%, {}/{} query terms in the top \
+             result) — {}\n",
+            diag.confidence,
+            diag.coverage * 100.0,
+            diag.matched_terms,
+            diag.query_terms,
+            diag.reason
+        ));
+        if !diag.non_canon.is_empty() {
+            out.push_str(&format!(
+                "NOT IN CANON: {}. Do not substitute a std page; say the canon does \
+                 not cover it.\n",
+                diag.non_canon.join(", ")
+            ));
+        }
+        out.push('\n');
         for (rank, (_, d)) in hits.iter().enumerate() {
             out.push_str(&format!(
                 "[{}] {}   ({}, ~{} tok)\n     show: {}/{}\n",

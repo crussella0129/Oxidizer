@@ -60,6 +60,8 @@ Be explicit with the user rather than improvising:
   categories, named in the project brief, are not reachable from this
   environment's egress policy. For a crate question, say the canon does not
   cover it and reason from the crate's own docs if the user supplies them.
+  `search` detects the common crate names and reports `NOT IN CANON` — treat
+  that as instruction, not decoration.
 - **Nightly-only features**, unless the corpus was built with
   `--include unstable-book`.
 - **`core` and `alloc`**, unless built with `--include core,alloc`. std

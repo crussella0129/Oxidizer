@@ -113,20 +113,59 @@ it to force a fresh clone.
 - **crates.io / lib.rs.** Not mirrored. `lib.rs`, named in the project brief, is
   blocked by this environment's egress policy (HTTP 403), and no third-party
   crate documentation is included.
-- **Full-text search.** The index carries titles, headings, summaries, member
-  names, and the 80 most distinctive body terms per document — not complete
-  bodies. Distinctive vocabulary is findable; an arbitrary phrase buried in
-  prose may not be. `show` the document and read it when you need certainty.
+- **Semantic search.** Retrieval is lexical (BM25 plus a curated alias table),
+  not embedding-based. A question sharing no vocabulary at all with the document
+  that answers it — and not covered by an alias — can still be missed. The
+  confidence line reports when that has probably happened.
 - **Translated pages.** Rust By Example ships several languages and they are all
   mirrored, so a search can surface a Spanish or Japanese hit. Harmless, but
   check the title before quoting.
 
+## How search works
+
+Retrieval is BM25 over full document bodies, plus a boost for matches in
+high-signal fields (title, path, member names, headings). `mirror.py` writes
+`POSTINGS.json`, a term-major inverted index — about 34k terms and 713k postings
+over 5,657 documents, 6.7 MiB. It is plain JSON so the Python CLI and the Rust
+MCP server read it identically, with no database engine and no dependency on
+either side.
+
+Two things sit on top of BM25:
+
+- **An alias table** mapping what users say to what the canon calls it
+  (`passing` → move/ownership, `'a` → lifetime, `counter` → mutex/arc). This is
+  the only fix for questions whose wording shares nothing with the answer: users
+  ask about lifetimes precisely because they do not know the word "lifetime".
+  Expansions are scored at a discount so they widen recall without overriding
+  the user's own terms.
+- **A confidence line** reporting how many of the question's terms the top
+  result actually contains. Raw scores are not comparable across queries or
+  source filters and are useless for this — before the rewrite, a wrong answer
+  scored 58 while a right one scored 27.
+
+Measured on a 13-question benchmark of naturally-phrased questions
+(`tests/run_tests.py`, section 12):
+
+| | before | after |
+|---|---|---|
+| precision@1 | 0% | 62% |
+| recall@5 | 10% | 100% |
+
+The benchmark accepts any of several correct documents per question, since the
+Book chapter and the corresponding std page are often both right answers.
+
 ## Size
 
-5,263 documents and ~8.1M tokens for the default set plus `--online`: 39.6 MiB
-of markdown plus 7.7 MiB of `INDEX.json`, distilled from 750 MiB of HTML. (`du`
-reports 56 MiB, counting allocated blocks across 5,263 small files.)
+With `--online` and `--algorithms`, 5,657 documents and ~8.6M tokens:
 
-That is small enough to keep several corpora around for different toolchains if
-you need to. It is dwarfed by any Rust `target/` directory — see
-`disk-hygiene.md`, and `oxidize disk` for the current numbers.
+| | |
+|---|---|
+| markdown | 34.1 MiB |
+| `INDEX.json` (per source) | 4.6 MiB |
+| `POSTINGS.json` (full-text index) | 6.7 MiB |
+| **total** | **47.9 MiB** |
+
+Distilled from 750 MiB of shipped HTML. (`du` reports more, counting allocated
+blocks across 5,657 small files.) Small enough to keep several corpora around
+for different toolchains, and dwarfed by any Rust `target/` directory — see
+`disk-hygiene.md`, and `oxidize disk` for current numbers.

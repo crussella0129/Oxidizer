@@ -238,28 +238,164 @@ def test_budgets() -> None:
 
 def test_search() -> None:
     section("8. Search ranking")
+    # The Brown fork mirrors the Book chapter for chapter, so either source
+    # ranking first is correct; the test asserts the right *page*.
     cases = [
-        ("trait objects vs generics", "book", None),
-        ("shared_ptr equivalent in Rust", "crp-phrasebook", None),
-        ("what is interior mutability RefCell", "book", "interior-mutability"),
+        ("trait objects vs generics", ("book", "brown-book"), None),
+        ("shared_ptr equivalent in Rust", ("crp-phrasebook",), None),
+        ("what is interior mutability RefCell", ("book", "brown-book"),
+         "interior-mutability"),
     ]
-    for query, source, id_part in cases:
+    for query, sources, id_part in cases:
         rc, out = oxidize("search", query, "--json", "--limit", "3")
         data = json.loads(out)
         hits = data["hits"]
         check(f"search {query[:40]!r} returns hits", bool(hits))
         if not hits:
             continue
-        check(f"search {query[:40]!r} ranks {source} first",
-              hits[0]["source"] == source,
+        check(f"search {query[:40]!r} ranks {'/'.join(sources)} first",
+              hits[0]["source"] in sources,
               f"got {hits[0]['source']}: {hits[0]['title']}")
         if id_part:
             check(f"search {query[:40]!r} finds the right page",
                   id_part in hits[0]["id"], f"got {hits[0]['id']}")
 
 
+# Naturally-phrased questions paired with every document that would be a
+# reasonable answer. Several documents usually qualify, so a single "expected
+# id" would understate quality — an earlier version of this benchmark scored
+# search at 0/10 partly because its needles were too narrow.
+RETRIEVAL_CASES = [
+    ("why can't I use this vector after passing it to a function",
+     ["ch04-01-what-is-ownership", "ch04-02-references"]),
+    ("what does 'a mean in a struct definition",
+     ["ch10-03-lifetime-syntax", "lifetime"]),
+    ("how do I share a counter between threads",
+     ["ch16-03-shared-state", "sync/struct.Mutex", "sync/struct.Arc"]),
+    ("how do I sort a vector of structs by a field",
+     ["sort_by_key", "sort_by", "primitive.slice", "trait.Ord"]),
+    ("how do I call a C function from Rust safely",
+     ["ffi", "extern", "nomicon"]),
+    ("how do I get the index while iterating",
+     ["struct.Enumerate", "enumerate", "ch13-02"]),
+    ("why can't I index into a String",
+     ["ch08-02-strings", "struct.String", "primitive.str"]),
+    ("how do I write an integration test", ["ch11-03", "integration"]),
+    ("how do modules and visibility work across files",
+     ["ch07", "module", "visibility"]),
+    ("why does my thread closure need move", ["ch16-01", "ch13-01", "closure"]),
+    ("how do I make a custom error type",
+     ["ch09", "define_error_type", "trait.Error"]),
+    ("what is the difference between String and &str",
+     ["ch08-02-strings", "struct.String", "primitive.str"]),
+    ("how do I read a file line by line",
+     ["struct.BufReader", "io/index", "lines"]),
+]
+
+# Retrieval quality measured before the BM25 rewrite was precision@1 0/10 and
+# recall@5 1/10. These thresholds sit below current measured quality so normal
+# corpus drift does not fail the build, but a real regression will.
+MIN_PRECISION_AT_1 = 0.45
+MIN_RECALL_AT_5 = 0.75
+
+
+def test_retrieval_quality() -> None:
+    section("12. Retrieval benchmark")
+    hits_at_1 = hits_at_5 = 0
+    misses = []
+    for question, acceptable in RETRIEVAL_CASES:
+        rc, out = oxidize("search", question, "--json", "--limit", "20")
+        if rc != 0:
+            misses.append((question, "search failed"))
+            continue
+        rank = None
+        for i, h in enumerate(json.loads(out)["hits"], start=1):
+            key = f"{h['source']}/{h['id']}".lower()
+            if any(a.lower() in key for a in acceptable):
+                rank = i
+                break
+        if rank == 1:
+            hits_at_1 += 1
+        if rank and rank <= 5:
+            hits_at_5 += 1
+        else:
+            misses.append((question, f"rank {rank or '>20'}"))
+
+    n = len(RETRIEVAL_CASES)
+    p1, r5 = hits_at_1 / n, hits_at_5 / n
+    check(f"precision@1 >= {MIN_PRECISION_AT_1:.0%} (got {p1:.0%}, {hits_at_1}/{n})",
+          p1 >= MIN_PRECISION_AT_1,
+          "; ".join(f"{q[:40]}: {why}" for q, why in misses[:4]))
+    check(f"recall@5 >= {MIN_RECALL_AT_5:.0%} (got {r5:.0%}, {hits_at_5}/{n})",
+          r5 >= MIN_RECALL_AT_5,
+          "; ".join(f"{q[:40]}: {why}" for q, why in misses[:4]))
+
+
+def test_confidence_signals() -> None:
+    section("13. Confidence and not-in-canon signals")
+    # A question the canon answers well should report high confidence.
+    rc, out = oxidize("search", "how do I share a counter between threads",
+                      "--json", "--limit", "3")
+    data = json.loads(out)
+    check("a well-covered question reports high confidence",
+          data["confidence"] == "high", f"got {data['confidence']}")
+    check("confidence reports term coverage",
+          data["matched_terms"] > 0 and data["query_terms"] > 0)
+
+    # Third-party crates are the case that previously produced confident junk:
+    # "difference between anyhow and thiserror" returned btree_set::Difference.
+    for query, crate in [
+        ("how do I serialize a struct with serde", "serde"),
+        ("difference between anyhow and thiserror", "anyhow"),
+        ("how do I spawn a tokio task", "tokio"),
+    ]:
+        rc, out = oxidize("search", query, "--json", "--limit", "2")
+        data = json.loads(out)
+        check(f"{crate} question is flagged not-in-canon",
+              crate in data.get("non_canon", []), f"got {data.get('non_canon')}")
+        check(f"{crate} question reports low confidence",
+              data["confidence"] == "low", f"got {data['confidence']}")
+
+    # Question scaffolding must not be treated as content.
+    rc, out = oxidize("search", "difference between anyhow and thiserror",
+                      "--json", "--limit", "3")
+    ids = [h["id"] for h in json.loads(out)["hits"]]
+    check("the word 'difference' no longer retrieves btree_set::Difference",
+          not any("btree_set::Difference".lower() in i.lower() for i in ids),
+          f"got {ids}")
+
+    rc, out = oxidize("search", "--auto", "how do I share a counter between threads",
+                      "--json", "--limit", "3")
+    data = json.loads(out)
+    check("--auto reports the sources routing prefers",
+          isinstance(data.get("preferred"), list))
+    check("--auto boosts rather than filters (other sources still eligible)",
+          not data.get("sources"), f"sources={data.get('sources')}")
+
+
+def test_postings_index() -> None:
+    section("14. Full-text postings index")
+    corpus = Path(os.environ.get("OXIDIZER_CORPUS", ROOT / "corpus"))
+    path = corpus / "POSTINGS.json"
+    if not check("POSTINGS.json exists", path.exists()):
+        return
+    post = json.loads(path.read_text())
+    check("postings cover every indexed document",
+          len(post["docs"]) > 3000, f"{len(post['docs'])} docs")
+    check("postings record per-document lengths for BM25",
+          len(post["lengths"]) == len(post["docs"]))
+    check("postings record an average document length",
+          post.get("avg_length", 0) > 0)
+    check("index is substantial", len(post["terms"]) > 10_000,
+          f"{len(post['terms'])} terms")
+
+    # Body-only vocabulary is the whole point: these appear in prose, not titles.
+    for term in ("shared_ptr", "enumerate", "with_capacity", "utf"):
+        check(f"body term {term!r} is indexed", term in post["terms"])
+
+
 def test_algorithms() -> None:
-    section("10. Worked-examples source (non-canonical)")
+    section("15. Worked-examples source (non-canonical)")
     manifest_path = Path(os.environ.get("OXIDIZER_CORPUS", ROOT / "corpus")) / "MANIFEST.json"
     m = json.loads(manifest_path.read_text())
     src = next((s for s in m["sources"] if s["id"] == "algorithms"), None)
@@ -321,7 +457,7 @@ def test_algorithms() -> None:
 
 
 def test_implement_routing() -> None:
-    section("11. 08_implement routing (must not cannibalise other domains)")
+    section("16. 08_implement routing (must not cannibalise other domains)")
     for question, domain in [
         ("implement a trie in Rust", "08_implement"),
         ("how do I write a red-black tree from scratch", "08_implement"),
@@ -354,7 +490,7 @@ def test_implement_routing() -> None:
 
 
 def test_disk() -> None:
-    section("12. Disk hygiene reporting")
+    section("17. Disk hygiene reporting")
     rc, out = oxidize("disk", str(ROOT), "--json")
     if rc != 0:
         check("disk command runs", False, out[:300])
@@ -402,7 +538,7 @@ def test_disk() -> None:
 
 
 def test_disk_guidance_documented() -> None:
-    section("13. Disk-hygiene guidance is wired into the skill")
+    section("18. Disk-hygiene guidance is wired into the skill")
     ref = ROOT / "skills" / "oxidizer" / "references" / "disk-hygiene.md"
     check("references/disk-hygiene.md exists", ref.exists())
     if ref.exists():
@@ -494,7 +630,7 @@ class McpClient:
 
 
 def test_mcp() -> None:
-    section("14. MCP server over stdio")
+    section("19. MCP server over stdio")
     if not MCP_BIN.exists():
         check("MCP binary built", False,
               f"not found at {MCP_BIN} — run `cargo build` in mcp/oxidizer-mcp")
@@ -584,6 +720,9 @@ def main() -> int:
     test_budgets()
     test_search()
     test_explain()
+    test_retrieval_quality()
+    test_confidence_signals()
+    test_postings_index()
     test_algorithms()
     test_implement_routing()
     test_disk()

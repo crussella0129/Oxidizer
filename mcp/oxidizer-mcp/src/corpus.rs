@@ -59,8 +59,6 @@ pub struct Doc {
     pub members: Vec<String>,
     #[serde(default)]
     pub summary: String,
-    #[serde(default)]
-    pub keywords: Vec<String>,
     pub url: String,
     pub tokens: usize,
     pub file: String,
@@ -80,25 +78,34 @@ pub struct Fields {
     pub heads: String,
     pub members: String,
     pub summary: String,
-    pub keywords: String,
 }
 
 impl Fields {
-    fn iter(&self) -> [(&str, f64); 7] {
+    /// Boosts layered on top of the BM25 body score, not a scoring scheme in
+    /// their own right — hence much smaller than the old flat weights.
+    fn iter(&self) -> [(&str, f64); 6] {
         [
-            (self.title.as_str(), 10.0),
-            (self.path.as_str(), 8.0),
-            (self.doc_id.as_str(), 5.0),
-            (self.heads.as_str(), 3.0),
-            (self.members.as_str(), 6.0),
-            (self.summary.as_str(), 2.0),
-            (self.keywords.as_str(), 1.5),
+            (self.title.as_str(), 3.0),
+            (self.path.as_str(), 2.5),
+            (self.members.as_str(), 2.0),
+            (self.heads.as_str(), 1.5),
+            (self.doc_id.as_str(), 1.5),
+            (self.summary.as_str(), 0.5),
         ]
     }
+}
 
-    fn any_contains(&self, term: &str) -> bool {
-        self.iter().iter().any(|(b, _)| b.contains(term))
+fn field_bonus(f: &Fields, weighted: &HashMap<String, f64>) -> f64 {
+    let mut bonus = 0.0;
+    for (term, weight) in weighted {
+        for (blob, boost) in f.iter() {
+            if blob.is_empty() || !blob.contains(term.as_str()) {
+                continue;
+            }
+            bonus += boost * weight * if whole_word(blob, term) { 1.0 } else { 0.3 };
+        }
     }
+    bonus
 }
 
 /// rustdoc emits these as headings on nearly every page; left in, a search for
@@ -125,18 +132,186 @@ const KIND_PREFIXES: &[&str] = &[
     "static ", "union ", "primitive ", "keyword ", "module ", "derive ", "attr ",
 ];
 
+/// Question scaffolding. Left in, "difference between anyhow and thiserror"
+/// retrieves `btree_set::Difference` on the word "difference". That was a real
+/// result before these were removed.
 const STOPWORDS: &[&str] = &[
-    "the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "in", "on",
-    "for", "and", "or", "it", "this", "that", "with", "as", "at", "by", "from",
-    "how", "what", "why", "do", "does", "did", "can", "i", "my", "me", "you",
-    "rust", "code", "use", "using", "get", "make",
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "to",
+    "of", "in", "on", "for", "and", "or", "it", "this", "that", "with", "as",
+    "at", "by", "from", "how", "what", "why", "when", "where", "do", "does",
+    "did", "can", "could", "should", "would", "will", "i", "my", "me", "you",
+    "your", "we", "our", "rust", "code", "use", "using", "used", "get", "make",
+    "difference", "between", "vs", "versus", "way", "ways", "best", "good",
+    "want", "need", "trying", "try", "help", "please", "something", "thing",
+    "things", "any", "some", "all", "into", "about", "there", "here", "have",
+    "has", "but", "not", "if", "then", "than", "so", "just", "only", "also",
+    "work", "works", "working", "handle", "handling", "mean", "means", "one",
+    "two", "let", "like", "know", "tell", "show", "give", "take", "put",
 ];
+
+/// What users say -> what the canon calls it. The single largest measured
+/// failure class was questions sharing no vocabulary at all with the document
+/// that answers them, which no amount of reweighting can fix. Expansions are
+/// discounted so they widen recall without overriding the user's own wording.
+const ALIASES: &[(&str, &[&str])] = &[
+    ("passing", &["move", "ownership", "transfer"]),
+    ("passed", &["move", "ownership"]),
+    ("giving", &["move", "ownership"]),
+    ("consumed", &["move", "ownership", "drop"]),
+    ("reuse", &["move", "ownership", "borrow"]),
+    ("copy", &["clone", "copy", "move"]),
+    ("freed", &["drop", "deallocate", "scope"]),
+    ("dangling", &["lifetime", "borrow", "dangling"]),
+    ("outlives", &["lifetime", "outlives"]),
+    ("tick", &["lifetime", "annotation"]),
+    ("annotation", &["lifetime", "generic"]),
+    ("change", &["mutable", "mutability", "borrow"]),
+    ("modify", &["mutable", "mutability", "borrow"]),
+    ("mutate", &["mutable", "mutability"]),
+    ("threads", &["thread", "concurrency", "send", "sync"]),
+    ("thread", &["thread", "concurrency", "spawn"]),
+    ("share", &["shared", "arc", "mutex", "state"]),
+    ("shared", &["arc", "mutex", "state", "sync"]),
+    ("counter", &["mutex", "arc", "atomic", "shared"]),
+    ("parallel", &["thread", "concurrency", "spawn"]),
+    ("concurrently", &["concurrency", "async", "spawn", "join"]),
+    ("lock", &["mutex", "rwlock", "guard"]),
+    ("await", &["async", "future", "poll"]),
+    ("asynchronous", &["async", "future"]),
+    ("blocking", &["async", "thread", "block"]),
+    ("string", &["string", "str", "utf8", "chars"]),
+    ("text", &["string", "str", "utf8"]),
+    ("characters", &["chars", "utf8", "grapheme"]),
+    ("substring", &["slice", "str", "chars"]),
+    ("vector", &["vec", "vector", "slice"]),
+    ("array", &["array", "slice", "vec"]),
+    ("list", &["vec", "slice", "linked"]),
+    ("dictionary", &["hashmap", "map", "btreemap"]),
+    ("sort", &["sort", "sort_by", "sort_by_key", "ord"]),
+    ("sorting", &["sort", "sort_by_key", "ord"]),
+    ("iterate", &["iterator", "iter", "loop", "next"]),
+    ("iterating", &["iterator", "iter", "enumerate"]),
+    ("index", &["index", "indexing", "enumerate", "position"]),
+    ("group", &["entry", "hashmap", "fold", "collect"]),
+    ("filter", &["filter", "iterator", "retain"]),
+    ("error", &["error", "result", "err"]),
+    ("errors", &["error", "result", "err"]),
+    ("failure", &["error", "result", "panic"]),
+    ("crash", &["panic", "unwrap", "abort"]),
+    ("propagate", &["question", "result", "from", "error"]),
+    ("interface", &["trait", "impl", "dyn"]),
+    ("inheritance", &["trait", "composition", "dyn"]),
+    ("constraint", &["bound", "where", "trait"]),
+    ("polymorphism", &["trait", "dyn", "generic"]),
+    ("allocating", &["allocation", "heap", "capacity", "reserve"]),
+    ("allocation", &["heap", "capacity", "with_capacity", "reserve"]),
+    ("memory", &["heap", "stack", "allocation", "drop"]),
+    ("file", &["module", "mod", "crate", "path"]),
+    ("files", &["module", "mod", "crate"]),
+    ("import", &["use", "path", "module"]),
+    ("visibility", &["pub", "private", "module"]),
+    ("dependency", &["dependencies", "cargo", "crate"]),
+    ("feature", &["features", "cargo", "cfg"]),
+    ("test", &["test", "tests", "assert"]),
+    ("testing", &["test", "tests", "assert"]),
+    ("benchmark", &["bench", "profile", "release"]),
+    ("pointer", &["pointer", "raw", "unsafe", "reference"]),
+];
+
+/// Widely used crates deliberately not mirrored. Naming one reliably means the
+/// canon cannot answer the question, and saying so beats returning the
+/// closest-looking std page.
+const NON_CANON_CRATES: &[&str] = &[
+    "serde", "serde_json", "tokio", "anyhow", "thiserror", "clap", "rayon",
+    "reqwest", "axum", "actix", "hyper", "tracing", "log", "env_logger",
+    "regex", "chrono", "uuid", "rand", "itertools", "futures", "async_std",
+    "crossbeam", "parking_lot", "bytes", "nom", "syn", "quote", "proc_macro2",
+    "diesel", "sqlx", "bevy", "egui", "wgpu", "criterion", "proptest",
+    "quickcheck", "mockall", "eyre", "smallvec", "indexmap", "dashmap",
+    "once_cell", "lazy_static", "ndarray", "polars", "petgraph", "image",
+    "ratatui", "crossterm", "pyo3", "wasm_bindgen",
+];
+
+/// Query terms mapped to a weight; alias expansions are discounted.
+pub fn expand(qterms: &[String], query: &str) -> HashMap<String, f64> {
+    let mut out: HashMap<String, f64> = qterms.iter().map(|t| (t.clone(), 1.0)).collect();
+    // Lifetime syntax survives neither tokenisation nor stopword removal.
+    if lifetime_syntax(query) {
+        for t in ["lifetime", "annotation"] {
+            out.entry(t.to_string()).or_insert(0.45);
+        }
+    }
+    for t in qterms {
+        if let Some((_, aliases)) = ALIASES.iter().find(|(k, _)| k == t) {
+            for a in *aliases {
+                out.entry((*a).to_string()).or_insert(0.45);
+            }
+        }
+    }
+    out
+}
+
+fn lifetime_syntax(query: &str) -> bool {
+    let b = query.as_bytes();
+    b.iter().enumerate().any(|(i, &c)| {
+        c == b'\'' && b.get(i + 1).is_some_and(|n| n.is_ascii_lowercase())
+    })
+}
+
+pub fn detect_non_canon(query: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for tok in tokenize(query) {
+        if NON_CANON_CRATES.contains(&tok.as_str()) && !out.contains(&tok) {
+            out.push(tok);
+        }
+    }
+    out
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Postings {
+    pub docs: Vec<String>,
+    pub lengths: Vec<u32>,
+    pub avg_length: f64,
+    /// term -> [[doc_ordinal, term_frequency], ..]
+    pub terms: HashMap<String, Vec<[u32; 2]>>,
+}
+
+/// How far to trust a result set. Reported to the caller so an agent can tell
+/// "the canon answers this" from "the closest thing I could find".
+#[derive(Debug, Clone)]
+pub struct Assessment {
+    pub confidence: String,
+    pub coverage: f64,
+    pub matched_terms: usize,
+    pub query_terms: usize,
+    pub non_canon: Vec<String>,
+    pub reason: String,
+}
+
+impl Assessment {
+    fn none(reason: &str) -> Self {
+        Self {
+            confidence: "none".into(),
+            coverage: 0.0,
+            matched_terms: 0,
+            query_terms: 0,
+            non_canon: Vec::new(),
+            reason: reason.to_string(),
+        }
+    }
+}
+
+const K1: f64 = 1.2; // BM25 term-frequency saturation
+const B: f64 = 0.75; // BM25 length normalisation
 
 pub struct Corpus {
     pub root: PathBuf,
     pub manifest: Manifest,
     pub docs: Vec<Doc>,
     fields: Vec<Fields>,
+    postings: Option<Postings>,
+    by_key: HashMap<String, usize>,
     by_path: HashMap<String, usize>,
     by_name: HashMap<String, Vec<usize>>,
 }
@@ -191,7 +366,28 @@ impl Corpus {
             v.sort_by_key(|&i| (kind_rank(&docs[i].kind), docs[i].path.as_ref().map_or(0, |p| p.len())));
         }
 
-        Ok(Self { root: root.to_path_buf(), manifest, docs, fields, by_path, by_name })
+        let by_key: HashMap<String, usize> = docs
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (format!("{}/{}", d.source, d.id), i))
+            .collect();
+
+        // Absent on a corpus built before postings existed; search reports that
+        // rather than silently returning nothing.
+        let postings = std::fs::read_to_string(root.join("POSTINGS.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Postings>(&t).ok());
+
+        Ok(Self {
+            root: root.to_path_buf(),
+            manifest,
+            docs,
+            fields,
+            postings,
+            by_key,
+            by_path,
+            by_name,
+        })
     }
 
     pub fn read(&self, doc: &Doc) -> Result<String> {
@@ -210,77 +406,151 @@ impl Corpus {
         })
     }
 
-    /// Ranked search. Mirrors `oxidize.py`: IDF-weighted field matching, with
-    /// whole-word hits worth more than incidental substrings.
-    pub fn search(&self, query: &str, sources: &[String], limit: usize) -> Vec<(f64, &Doc)> {
+    /// Ranked search: BM25 over document bodies plus a boost for matches in
+    /// high-signal fields, mirroring `oxidize.py` exactly.
+    ///
+    /// `prefer` is a soft prior from the routing table rather than a filter —
+    /// routing is a guess, and hard-scoping to it makes the right document
+    /// unreachable when the guess is wrong.
+    pub fn search(
+        &self,
+        query: &str,
+        sources: &[String],
+        limit: usize,
+        prefer: &[String],
+    ) -> (Vec<(f64, &Doc)>, Assessment) {
         let qterms = terms(query);
         if qterms.is_empty() {
-            return Vec::new();
+            return (Vec::new(), Assessment::none("query has no content terms"));
         }
-        let phrase = query.trim().to_lowercase();
+        let weighted = expand(&qterms, query);
+        let non_canon = detect_non_canon(query);
 
-        let pool: Vec<usize> = (0..self.docs.len())
-            .filter(|&i| sources.is_empty() || sources.contains(&self.docs[i].source))
-            .collect();
+        let Some(post) = self.postings.as_ref() else {
+            return (Vec::new(), Assessment::none("corpus has no postings index; rebuild with mirror.py"));
+        };
 
-        // Terms that appear on nearly every page carry almost no signal.
-        let n = pool.len().max(1) as f64;
-        let idf: HashMap<&str, f64> = qterms
-            .iter()
-            .map(|t| {
-                let df = pool.iter().filter(|&&i| self.fields[i].any_contains(t)).count() as f64;
-                (t.as_str(), (1.0 + n / (1.0 + df)).ln())
-            })
-            .collect();
+        let allowed: Option<Vec<bool>> = if sources.is_empty() {
+            None
+        } else {
+            Some(
+                post.docs
+                    .iter()
+                    .map(|k| {
+                        k.split_once('/')
+                            .is_some_and(|(src, _)| sources.iter().any(|s| s == src))
+                    })
+                    .collect(),
+            )
+        };
 
-        let mut scored: Vec<(f64, &Doc)> = pool
-            .iter()
-            .map(|&i| (self.score(i, &qterms, &phrase, &idf), &self.docs[i]))
-            .filter(|(s, _)| *s > 0.0)
-            .collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(limit);
-        scored
-    }
-
-    fn score(&self, i: usize, qterms: &[String], phrase: &str, idf: &HashMap<&str, f64>) -> f64 {
-        let f = &self.fields[i];
-        let doc = &self.docs[i];
-        let mut s = 0.0;
-        let mut matched = 0usize;
-
-        for t in qterms {
-            let w = idf.get(t.as_str()).copied().unwrap_or(1.0);
-            let mut hit = false;
-            for (blob, weight) in f.iter() {
-                if blob.is_empty() || !blob.contains(t.as_str()) {
+        // BM25 accumulation over the postings lists of the query terms.
+        let n = post.docs.len() as f64;
+        let avg = if post.avg_length > 0.0 { post.avg_length } else { 1.0 };
+        let mut raw: HashMap<u32, f64> = HashMap::new();
+        for (term, weight) in &weighted {
+            let Some(plist) = post.terms.get(term.as_str()) else { continue };
+            let df = plist.len() as f64;
+            let idf = (1.0 + (n - df + 0.5) / (df + 0.5)).ln();
+            for entry in plist {
+                let (ordinal, tf) = (entry[0], entry[1] as f64);
+                if let Some(mask) = &allowed
+                    && !mask.get(ordinal as usize).copied().unwrap_or(false)
+                {
                     continue;
                 }
-                s += weight * w * if whole_word(blob, t) { 1.0 } else { 0.35 };
-                hit = true;
+                let dl = *post.lengths.get(ordinal as usize).unwrap_or(&1) as f64;
+                let denom = tf + K1 * (1.0 - B + B * dl / avg);
+                *raw.entry(ordinal).or_insert(0.0) += weight * idf * (tf * (K1 + 1.0)) / denom;
             }
-            if hit {
-                matched += 1;
-            }
+        }
+        if raw.is_empty() {
+            let mut a = Assessment::none("no document contains any of the query terms");
+            a.non_canon = non_canon;
+            return (Vec::new(), a);
         }
 
-        if phrase.len() > 4 {
-            if f.title.contains(phrase) {
-                s += 25.0;
-            } else if f.heads.contains(phrase) {
-                s += 12.0;
-            } else if f.summary.contains(phrase) {
-                s += 6.0;
+        let mut ranked: Vec<(u32, f64)> = raw.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.truncate(limit.saturating_mul(12).max(limit));
+
+        let phrase = query.trim().to_lowercase();
+        let mut scored: Vec<(f64, &Doc)> = Vec::new();
+        for (ordinal, base) in ranked {
+            let Some(key) = post.docs.get(ordinal as usize) else { continue };
+            let Some(&i) = self.by_key.get(key.as_str()) else { continue };
+            let f = &self.fields[i];
+            let doc = &self.docs[i];
+            let mut total = base + field_bonus(f, &weighted);
+            if phrase.len() > 8 && f.title.contains(&phrase) {
+                total += 8.0;
+            }
+            if doc.id.ends_with("index") || doc.kind == "module" {
+                total *= 0.6;
+            }
+            if prefer.contains(&doc.source) {
+                total *= 1.4;
+            }
+            scored.push((total, doc));
+        }
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+
+        let assessment = self.assess(&scored, &qterms, non_canon);
+        (scored, assessment)
+    }
+
+    /// How much of the question the best hit actually covers.
+    ///
+    /// Raw scores are not comparable across queries or across source filters,
+    /// so they are useless as a confidence signal. Term coverage is comparable,
+    /// and is what gets reported.
+    fn assess(&self, hits: &[(f64, &Doc)], qterms: &[String], non_canon: Vec<String>) -> Assessment {
+        let Some((_, top)) = hits.first() else {
+            let mut a = Assessment::none("nothing matched");
+            a.non_canon = non_canon;
+            return a;
+        };
+        let post = self.postings.as_ref();
+        let key = format!("{}/{}", top.source, top.id);
+        let ordinal = post.and_then(|p| p.docs.iter().position(|d| *d == key));
+
+        let mut covered = 0usize;
+        if let (Some(p), Some(o)) = (post, ordinal) {
+            for t in qterms {
+                if p.terms
+                    .get(t.as_str())
+                    .is_some_and(|pl| pl.iter().any(|e| e[0] as usize == o))
+                {
+                    covered += 1;
+                }
             }
         }
-        if s > 0.0 {
-            s *= 0.35 + 0.65 * (matched as f64 / qterms.len() as f64);
+        let coverage = covered as f64 / qterms.len().max(1) as f64;
+
+        let (confidence, reason) = if !non_canon.is_empty() {
+            ("low", format!(
+                "question names {}, which the canon does not cover — say so rather \
+                 than substituting a std page",
+                non_canon.join(", ")
+            ))
+        } else if coverage >= 0.6 {
+            ("high", "top result contains most of the question's terms".to_string())
+        } else if coverage >= 0.34 {
+            ("medium", "top result contains some of the question's terms".to_string())
+        } else {
+            ("low", "top result contains few of the question's terms; the canon may \
+                     not answer this".to_string())
+        };
+
+        Assessment {
+            confidence: confidence.to_string(),
+            coverage,
+            matched_terms: covered,
+            query_terms: qterms.len(),
+            non_canon,
+            reason,
         }
-        // Index and landing pages are rarely the answer.
-        if doc.id.ends_with("index") || doc.kind == "module" {
-            s *= 0.55;
-        }
-        s
     }
 
     /// Resolve an API path like `std::vec::Vec::retain`, `Vec::retain`, or
@@ -398,7 +668,6 @@ fn build_fields(d: &Doc) -> Fields {
         heads,
         members: d.members.join(" ").to_lowercase(),
         summary: d.summary.to_lowercase(),
-        keywords: d.keywords.join(" ").to_lowercase(),
     }
 }
 
@@ -438,28 +707,68 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-pub fn terms(query: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    for ch in query.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            cur.push(ch.to_ascii_lowercase());
-        } else if !cur.is_empty() {
-            push_term(&mut out, std::mem::take(&mut cur));
+/// Tokenise exactly as `extract.py` does at index time. If the two ever
+/// diverge, query terms silently stop matching the postings they should.
+/// Identifiers are also split on `_` and at camelCase boundaries and the parts
+/// emitted alongside the whole, so "capacity" finds `with_capacity`.
+pub fn tokenize(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if !(c.is_ascii_alphabetic() || c == b'_') {
+            i += 1;
+            continue;
         }
-    }
-    if !cur.is_empty() {
-        push_term(&mut out, cur);
+        let start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        let raw = &text[start..i];
+        let low = raw.to_ascii_lowercase();
+        if low.len() > 1 {
+            out.push(low.clone());
+        }
+        if raw.contains('_') {
+            out.extend(low.split('_').filter(|p| p.len() > 1).map(str::to_string));
+        } else if !raw.chars().all(|c| c.is_lowercase() || !c.is_alphabetic())
+            && !raw.chars().all(|c| c.is_uppercase() || !c.is_alphabetic())
+        {
+            for part in split_camel(raw) {
+                if part.len() > 1 {
+                    out.push(part.to_ascii_lowercase());
+                }
+            }
+        }
     }
     out
 }
 
-fn push_term(out: &mut Vec<String>, t: String) {
-    // A term must start with a letter or underscore, matching the Python side.
-    if t.len() > 1 && !t.starts_with(|c: char| c.is_ascii_digit()) && !STOPWORDS.contains(&t.as_str())
-    {
-        out.push(t);
+fn split_camel(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if ch.is_uppercase() && !cur.is_empty() {
+            parts.push(std::mem::take(&mut cur));
+        }
+        cur.push(ch);
     }
+    if !cur.is_empty() {
+        parts.push(cur);
+    }
+    if parts.len() > 1 { parts } else { Vec::new() }
+}
+
+/// Content terms of a query, in order, without duplicates.
+pub fn terms(query: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for tok in tokenize(query) {
+        if tok.len() > 1 && !STOPWORDS.contains(&tok.as_str()) && !out.contains(&tok) {
+            out.push(tok);
+        }
+    }
+    out
 }
 
 fn strip_provenance(text: &str) -> String {

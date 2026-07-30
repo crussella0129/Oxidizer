@@ -145,6 +145,14 @@ Every command takes `--max-tokens` (default 2000) and `--json`. Truncation
 happens on a paragraph boundary and reports the headings it withheld, so the
 caller can narrow rather than blindly raise the budget.
 
+`search` is BM25 over full document bodies plus a curated alias table mapping
+user vocabulary to the canon's (`'a` → lifetime, `counter` → mutex/arc). It
+reports a confidence line — how much of the question the top result actually
+covers — and flags questions naming third-party crates as `NOT IN CANON` rather
+than returning the closest-looking std page. On a 13-question benchmark of
+naturally-phrased questions, precision@1 went from 0% to 62% and recall@5 from
+10% to 100%.
+
 ## Architecture
 
 Oxidizer follows the Model Workspace Protocol from *Interpretable Context

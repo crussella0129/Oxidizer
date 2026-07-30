@@ -63,6 +63,13 @@ question is obviously about the second.
 choose; it is not a source. Follow it with `show` or `api` and read the actual
 text before you commit to an answer.
 
+**Believe the confidence line.** Every search reports how much of the question
+the top result actually covers. On `low`, do not dress up the closest-looking
+page as an answer — say what the canon does and does not cover. If the report
+says `NOT IN CANON`, the question named a third-party crate (serde, tokio,
+anyhow, clap, ...); none of them are mirrored, and substituting a std page that
+merely shares a word is the specific failure this signal exists to stop.
+
 **Spend the budget deliberately.** Every command defaults to ~2000 tokens and
 tells you when it truncated, along with the section headings it withheld. Prefer
 narrowing (`--section`, or `api Type::method` instead of `api Type`) over raising

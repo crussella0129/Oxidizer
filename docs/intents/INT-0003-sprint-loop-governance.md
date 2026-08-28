@@ -2,12 +2,12 @@
 
 <!-- sprint-loop-intent-v2 -->
 - **Intent ID:** INT-0003
-- **State:** active
+- **State:** realized
 - **Work evidence:** [T-001 build plan](../sprints/s0/sprint-plans/build-plan.md#t-001-establish-book-and-intent-chapters)
-- **Completion evidence:** none
-- **Code evidence:** none
-- **Test evidence:** none
-- **Documentation evidence:** none
+- **Completion evidence:** [T-001 completion](../work/completed-tasks.md#t-001-sprint-0), [T-002 completion](../work/completed-tasks.md#t-002-sprint-0), [T-003 completion](../work/completed-tasks.md#t-003-sprint-0)
+- **Code evidence:** [docs/.sprint-loop-book](../../docs/.sprint-loop-book)
+- **Test evidence:** [Sprint 0 test report](../sprints/s0/sprint-tests/test-report.md)
+- **Documentation evidence:** [docs/README.md](../README.md), [docs/SUMMARY.md](../SUMMARY.md)
 
 ## Intent
 
@@ -58,3 +58,4 @@ auditable history — governance that matches the project's quality bar.
 - 2026-08-28: created as `proposed` during Sprint 0 research.
 - 2026-08-28: `proposed` → `planned`. Sprint 0 plan accepted.
 - 2026-08-28: `planned` → `active`. Sprint 0 build phase started.
+- 2026-08-28: `active` → `realized`. All acceptance criteria satisfied. Sprint 0 complete.

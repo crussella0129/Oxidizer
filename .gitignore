@@ -9,3 +9,8 @@ target/
 # Python
 __pycache__/
 *.py[cod]
+# >>> sprint-loops >>>
+# The Book is tracked. Ignore only transient helper output.
+*.tmp
+/guards-report.ndjson
+# <<< sprint-loops <<<

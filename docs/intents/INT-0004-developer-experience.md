@@ -2,12 +2,12 @@
 
 <!-- sprint-loop-intent-v2 -->
 - **Intent ID:** INT-0004
-- **State:** active
+- **State:** realized
 - **Work evidence:** [T-004 build plan](../sprints/s1/sprint-plans/build-plan.md#t-004-create-project-specific-claudemd)
-- **Completion evidence:** none
-- **Code evidence:** none
-- **Test evidence:** none
-- **Documentation evidence:** none
+- **Completion evidence:** [T-004 completed](../work/completed-tasks.md#t-004-sprint-1)
+- **Code evidence:** [CLAUDE.md](../../CLAUDE.md)
+- **Test evidence:** [Sprint 1 test report](../sprints/s1/sprint-tests/test-report.md)
+- **Documentation evidence:** [CLAUDE.md](../../CLAUDE.md)
 
 ## Intent
 
@@ -60,3 +60,4 @@ preferences but not project-specific commands.
 - 2026-08-28: created as `proposed` during Sprint 1 research.
 - 2026-08-28: `proposed` → `planned`. Sprint 1 plan accepted.
 - 2026-08-28: `planned` → `active`. Sprint 1 build phase started.
+- 2026-08-28: `active` → `realized`. All 7 acceptance criteria verified in Sprint 1 test report.

@@ -17,3 +17,9 @@
 - **Completed:** 2026-08-28
 - **Touched:** `docs/sprints/s0/sprint-meta.md`
 - **Commit:** `3138ea52461e9f16cc787be68b10da51d3eaf3d8`
+
+## T-004 (sprint 1)
+- **Intent:** [INT-0004](../intents/INT-0004-developer-experience.md)
+- **Completed:** 2026-08-28
+- **Touched:** `CLAUDE.md`
+- **Commit:** `aa323b80db3e3935ab9d75f085dc04c2e8734584`

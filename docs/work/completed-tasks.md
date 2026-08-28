@@ -11,3 +11,9 @@
 - **Completed:** 2026-08-28
 - **Touched:** `docs/work/completed-tasks.md`
 - **Commit:** `20621dec0b03222cd4ecc0b1e0802ca3b34ef46f`
+
+## T-003 (Sprint 0)
+- **Intent:** [INT-0003](../intents/INT-0003-sprint-loop-governance.md)
+- **Completed:** 2026-08-28
+- **Touched:** `docs/sprints/s0/sprint-meta.md`
+- **Commit:** PENDING

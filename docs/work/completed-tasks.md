@@ -16,4 +16,4 @@
 - **Intent:** [INT-0003](../intents/INT-0003-sprint-loop-governance.md)
 - **Completed:** 2026-08-28
 - **Touched:** `docs/sprints/s0/sprint-meta.md`
-- **Commit:** PENDING
+- **Commit:** `3138ea52461e9f16cc787be68b10da51d3eaf3d8`

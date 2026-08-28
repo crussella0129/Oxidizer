@@ -22,4 +22,4 @@
 - **Intent:** [INT-0004](../intents/INT-0004-developer-experience.md)
 - **Completed:** 2026-08-28
 - **Touched:** `CLAUDE.md`
-- **Commit:** PENDING
+- **Commit:** `aa323b80db3e3935ab9d75f085dc04c2e8734584`

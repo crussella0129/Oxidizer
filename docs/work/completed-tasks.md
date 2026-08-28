@@ -10,4 +10,4 @@
 - **Intent:** [INT-0003](../intents/INT-0003-sprint-loop-governance.md)
 - **Completed:** 2026-08-28
 - **Touched:** `docs/work/completed-tasks.md`
-- **Commit:** PENDING
+- **Commit:** `20621dec0b03222cd4ecc0b1e0802ca3b34ef46f`
